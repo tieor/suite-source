@@ -910,6 +910,10 @@ function render(d: any, cardId: string, roomId: string, live: BubblesData = {},l
       isGM: cachedIsGM,
       fallback: statFallback,
       initialLive: live,
+      secondary: pf1e ? [
+        { label: "接触 AC", value: Number(pf.touch) || 0 },
+        { label: "措手不及", value: Number(pf.flatFooted) || 0 },
+      ] : undefined,
     });
   }
   if (pf1e) void syncPf1eResources(renderedTarget?.itemId ?? null, (pf.pools as any[]) || []);
