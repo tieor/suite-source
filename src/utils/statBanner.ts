@@ -217,6 +217,23 @@ const STAT_BANNER_CSS = `
 .stat-banner .stat-lock[data-locked="false"] .lock-shackle{
   d:path("M5 7 V5 a3 3 0 0 1 6 0");
 }
+.stat-banner .stat-more{
+  flex:none;width:26px;height:26px;border-radius:4px;
+  background:#3498db;border:1px solid #5dade2;color:#fff;
+  font-size:13px;font-weight:700;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  appearance:none;-webkit-appearance:none;padding:0;
+}
+.stat-banner .stat-more:hover{background:#4aa8e6}
+.stat-banner .stat-more:active{transform:scale(0.94)}
+.stat-banner .stat-more-tip{
+  position:fixed;left:50%;top:2px;transform:translateX(-50%);z-index:9999;
+  background:#111;color:#f2f2f2;border:1px solid rgba(255,255,255,0.25);
+  border-radius:5px;padding:6px 10px;font-size:11.5px;white-space:nowrap;
+  display:flex;flex-direction:column;gap:2px;
+  box-shadow:0 4px 16px rgba(0,0,0,0.5);
+}
+.stat-banner .stat-more-tip b{color:#9ecbf0;margin-left:8px}
 `;
 
 let stylesInjected = false;
@@ -298,7 +315,7 @@ export function mountStatBanner(opts: StatBannerOptions): {
         tip.appendChild(line);
       }
       banner.appendChild(tip);
-      setTimeout(() => tip.remove(), 4000);
+      setTimeout(() => tip.remove(), 5000);
     });
     container.querySelector<HTMLButtonElement>(".stat-lock")?.addEventListener("click", () => {
       const target = guard.capture(true);
