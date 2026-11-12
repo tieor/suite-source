@@ -114,7 +114,7 @@ function statBannerHtml(
                data-field="armor class" value="${escapeHtml(String(liveAc))}"
                title="AC">
       </div>
-      ${secondary && secondary.length ? `<button class="stat-more" type="button" title="接触 AC / 措手不及">▤</button>` : ""}
+      ${secondary && secondary.length ? `<button class="stat-more" type="button" title="接触 AC / 措手不及" aria-label="接触 AC / 措手不及"></button>` : ""}
       ${isGM ? lockButtonHtml(live.locked !== false) : ""}
     </div>
   `;
@@ -218,7 +218,7 @@ const STAT_BANNER_CSS = `
   d:path("M5 7 V5 a3 3 0 0 1 6 0");
 }
 .stat-banner .stat-more{
-  flex:none;width:26px;height:26px;border-radius:4px;
+  flex:none;width:24px;height:24px;border-radius:4px;margin-left:-8px;
   background:#3498db;border:1px solid #5dade2;color:#fff;
   font-size:13px;font-weight:700;line-height:1;cursor:pointer;
   display:flex;align-items:center;justify-content:center;
