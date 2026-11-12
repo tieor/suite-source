@@ -249,7 +249,7 @@ async function createTrickster(center: { x: number; y: number }, radius: number)
   )
     .position(center)
     .scale({ x: s, y: s })
-    .name("捣蛋鬼在哪？")
+    .name("陷阱")
     .layer("PROP")
     .visible(visible)
     .locked(locked)
@@ -513,7 +513,7 @@ export async function setupTrickster(): Promise<void> {
       icons: [
         {
           icon: TOOL_ICON_URL,
-          label: en ? "Where's the trickster?" : "捣蛋鬼在哪？",
+          label: en ? "Trap" : "陷阱",
           filter: { roles: ["GM"] },
         },
       ],
