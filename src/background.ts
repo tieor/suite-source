@@ -10,7 +10,6 @@ import { setupTimeStop, teardownTimeStop } from "./modules/timeStop";
 import { setupFocus, teardownFocus } from "./modules/focus";
 import { setupSearch, teardownSearch } from "./modules/search";
 import { setupInitiative, teardownInitiative } from "./modules/initiative";
-import { setupBestiary, teardownBestiary } from "./modules/bestiary";
 import {
   setupCharacterCards,
   teardownCharacterCards,
@@ -638,7 +637,6 @@ const modules: Partial<Record<keyof ReturnType<typeof getState>["enabled"], Modu
   timeStop: { setup: setupTimeStop, teardown: teardownTimeStop },
   focus: { setup: setupFocus, teardown: teardownFocus },
   initiative: { setup: setupInitiative, teardown: teardownInitiative },
-  bestiary: { setup: setupBestiary, teardown: teardownBestiary },
   characterCards: {
     setup: setupCharacterCards,
     teardown: teardownCharacterCards,
