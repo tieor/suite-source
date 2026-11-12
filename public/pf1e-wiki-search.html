@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>PF1E Wiki 搜索</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;width:100%;overflow:hidden;background:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;color:#e6e8ee}
+  .bar{position:absolute;inset:0;display:flex;align-items:center;gap:6px;padding:3px 4px}
+  .field{flex:1;min-width:0;height:32px;display:flex;align-items:center;
+    background:linear-gradient(135deg,rgba(22,33,62,0.95),rgba(15,52,96,0.95));
+    border:1px solid rgba(255,255,255,0.18);border-radius:16px;padding:0 10px;
+    box-shadow:0 4px 14px rgba(0,0,0,0.35);transition:border-color .15s}
+  .field:focus-within{border-color:#5dade2}
+  input{flex:1;min-width:0;height:100%;background:transparent;border:none;outline:none;
+    color:#e6e8ee;font-size:13px;font-family:inherit}
+  input::placeholder{color:#8a8e9c}
+  .go{flex:none;width:30px;height:30px;border-radius:50%;border:1px solid rgba(93,173,226,0.45);
+    background:rgba(93,173,226,0.18);color:#bfe0f5;font-size:14px;line-height:1;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;transition:background .12s,color .12s}
+  .go:hover{background:rgba(93,173,226,0.32);color:#fff}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="field">
+      <input id="q" type="text" autocomplete="off" spellcheck="false"
+             placeholder="搜索 PF1E Wiki…（回车打开）" autofocus>
+    </div>
+    <button class="go" id="go" type="button" title="在 PF1E Wiki 中搜索">🔍</button>
+  </div>
+<script>
+  const WIKI = "https://pf1.huijiwiki.com/wiki/";
+  const HOME = WIKI + "%E9%A6%96%E9%A1%B5";
+  function openWikiSearch(){
+    const q = (document.getElementById("q").value || "").trim();
+    const url = q ? WIKI + "Special:Search?search=" + encodeURIComponent(q) : HOME;
+    window.open(url, "_blank", "noopener");
+  }
+  document.getElementById("q").addEventListener("keydown", (e)=>{
+    if(e.key === "Enter"){ e.preventDefault(); openWikiSearch(); }
+  });
+  document.getElementById("go").addEventListener("click", openWikiSearch);
+</script>
+</body>
+</html>

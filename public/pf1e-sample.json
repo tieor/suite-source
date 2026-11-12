@@ -1,0 +1,412 @@
+{
+  "schema": "pf1e-card",
+  "version": 3,
+  "exportedAt": "2026-11-12T04:17:51.423Z",
+  "derived": {
+    "hpMax": 30,
+    "hpCurrent": 30,
+    "bab": 2,
+    "totalLevel": 1,
+    "abilityMods": {
+      "str": 3,
+      "dex": 2,
+      "con": 2,
+      "int": 0,
+      "wis": 1,
+      "cha": 0
+    },
+    "ac": 20,
+    "touch": 12,
+    "flatFooted": 18,
+    "fort": 5,
+    "ref": 3,
+    "will": 5,
+    "saves": {
+      "fort": 5,
+      "ref": 3,
+      "will": 5
+    },
+    "cmb": 5,
+    "cmd": 17,
+    "initiative": 2,
+    "vision": "",
+    "carryWeight": 0,
+    "carryCapacity": {
+      "light": 160,
+      "medium": 320,
+      "heavy": 480
+    },
+    "skillTotals": {
+      "climb": 0,
+      "swim": 0,
+      "acrobatics": -1,
+      "disable-device": -1,
+      "escape-artist": -1,
+      "fly": -1,
+      "ride": -1,
+      "sleight-of-hand": -1,
+      "stealth": -1,
+      "appraise": 0,
+      "linguistics": 0,
+      "spellcraft": 0,
+      "k-arcana": 0,
+      "k-dungeons": 0,
+      "k-nature": 0,
+      "k-planes": 0,
+      "k-religion": 0,
+      "k-history": 0,
+      "k-nobility": 0,
+      "k-local": 0,
+      "craft": 0,
+      "lore": 0,
+      "heal": 1,
+      "perception": 1,
+      "sense-motive": 1,
+      "survival": 1,
+      "profession": 1,
+      "bluff": 0,
+      "diplomacy": 0,
+      "disguise": 0,
+      "handle-animal": 0,
+      "intimidate": 0,
+      "use-magic-device": 0,
+      "art": 0,
+      "perform": 0
+    },
+    "spellSlots": {
+      "0": 2,
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0,
+      "5": 0,
+      "6": 0,
+      "7": 0,
+      "8": 0,
+      "9": 0
+    },
+    "pools": [
+      {
+        "name": "奥能池",
+        "current": 3,
+        "max": 7,
+        "desc": ""
+      }
+    ],
+    "spellcasting": [
+      {
+        "perDay": {
+          "0": 2
+        },
+        "prepared": {
+          "0": [
+            "魔法飞弹",
+            "护盾术"
+          ]
+        }
+      }
+    ]
+  },
+  "meta": {
+    "name": "示范角色",
+    "player": "玩家",
+    "race": "人类",
+    "raceName": "人类",
+    "size": "中型",
+    "align": "",
+    "background": "",
+    "totalLevel": 1
+  },
+  "classes": [
+    {
+      "name": "法师",
+      "variant": "预言学派",
+      "level": 1
+    }
+  ],
+  "abilities": {
+    "str": 16,
+    "dex": 14,
+    "con": 14,
+    "int": 10,
+    "wis": 12,
+    "cha": 10
+  },
+  "combat": {
+    "bab": 2,
+    "size": "中型"
+  },
+  "skillPoints": {
+    "total": 0
+  },
+  "defense": {
+    "hpBase": 30,
+    "hpCurrent": 30,
+    "nonlethal": 0,
+    "tempHP": 0,
+    "armor": 6,
+    "shield": 2,
+    "nat": 0,
+    "dodge": 0,
+    "deflect": 0,
+    "acMisc": 0,
+    "fortBase": 3,
+    "fortOther": 0,
+    "refBase": 1,
+    "refOther": 0,
+    "willBase": 4,
+    "willOther": 0,
+    "cmbOther": 0,
+    "cmbAbility": "str",
+    "cmdOther": 0,
+    "specialDef": ""
+  },
+  "vision": {
+    "base": "",
+    "misc": 0
+  },
+  "initiative": {
+    "feat": 0,
+    "misc": 0
+  },
+  "equipment": {
+    "armor": {
+      "name": "链甲衫",
+      "type": "重甲",
+      "price": 0,
+      "ac": 6,
+      "maxDex": 0,
+      "acp": 2,
+      "asf": 0,
+      "weight": 25,
+      "note": ""
+    },
+    "shield": {
+      "name": "轻盾",
+      "price": 0,
+      "ac": 2,
+      "acp": 1,
+      "asf": 0,
+      "weight": 6,
+      "note": ""
+    }
+  },
+  "attacks": [],
+  "specialAtk": "",
+  "feats": [],
+  "features": [],
+  "skills": {},
+  "spells": {
+    "pages": [
+      {
+        "perDay": {
+          "0": 2
+        },
+        "known": "",
+        "chips": {
+          "0": [
+            {
+              "v": "魔法飞弹",
+              "off": false
+            },
+            {
+              "v": "护盾术",
+              "off": false
+            }
+          ],
+          "1": [],
+          "2": [],
+          "3": [],
+          "4": [],
+          "5": [],
+          "6": [],
+          "7": [],
+          "8": [],
+          "9": []
+        }
+      }
+    ]
+  },
+  "pools": [
+    {
+      "name": "奥能池",
+      "current": 3,
+      "max": 7,
+      "desc": ""
+    }
+  ],
+  "levels": [
+    {
+      "lv": 1,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 2,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 3,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 4,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 5,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 6,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 7,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 8,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 9,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 10,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 11,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 12,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 13,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 14,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 15,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 16,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 17,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 18,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 19,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    },
+    {
+      "lv": 20,
+      "ability": "",
+      "cls": "",
+      "variant": "",
+      "feat": "",
+      "favored": ""
+    }
+  ],
+  "gear": [],
+  "coins": {
+    "pp": 0,
+    "gp": 120,
+    "sp": 0,
+    "cp": 0
+  },
+  "scrolls": [],
+  "carry": {
+    "size": "中型（二足）",
+    "enhance": 0
+  }
+}

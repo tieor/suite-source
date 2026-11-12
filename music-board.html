@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>音乐板</title></head>
+<body><main class="music-app">
+<header><button id="drag" class="plain grip" type="button">⠿</button><strong data-mt="title"></strong><button id="mini" class="plain" type="button">−</button><button id="close" class="plain" type="button">×</button></header>
+<section class="now"><span id="status"></span><strong id="name"></strong><span id="time"></span></section>
+<div id="soundNotice"><button id="enable" type="button" data-mt="enable"></button><span id="soundMessage"></span></div>
+<div class="full">
+<p id="readOnly" class="hint" hidden data-mt="readOnly"></p>
+<div class="transport"><button id="play" type="button" data-shared></button><button id="next" type="button" data-mt="next" data-shared></button><button id="stop" type="button" data-mt="stop" data-shared></button><label><input id="loop" type="checkbox" data-shared><span data-mt="loop"></span></label></div>
+<input id="seek" type="range" min="0" max="100" value="0" step="1" data-shared>
+<section class="local-volume"><div><span data-mt="localVolume"></span><label><input id="mute" type="checkbox"><span data-mt="mute"></span></label></div>
+<label><span>BGM</span><input id="bgmVolume" type="range" min="0" max="100" value="80"><output id="bgmVolumeValue">80</output></label>
+<label><span>SFX</span><input id="sfxVolume" type="range" min="0" max="100" value="100"><output id="sfxVolumeValue">100</output></label></section>
+<section><h2 data-mt="queue"></h2><div id="queue"></div></section>
+<details><summary data-mt="library"></summary><div id="library"></div>
+<textarea id="importText" rows="2" data-mt-placeholder="input"></textarea><div class="row"><label class="import-bus"><span data-mt="importBus"></span><select id="importBus"><option value="bgm" data-mt="busBgm"></option><option value="sfx" data-mt="busSfx"></option></select></label><button id="import" type="button" data-mt="import" data-shared></button><button id="defaults" type="button" data-mt="defaults"></button></div>
+<p id="importHint" class="hint" hidden data-mt="importSfxHint"></p>
+<div id="catalog" hidden><p class="hint" data-mt="sourceLimit"></p><input id="search" type="search" data-mt-placeholder="search"><div id="catalogTracks"></div></div></details>
+<section id="sfxSection" hidden><h2 data-mt="sounds"></h2><div id="sfx"></div><button id="clearSfx" type="button" data-mt="clearSfx" data-shared></button></section>
+<details><summary data-mt="studio"></summary><a class="studio-link" href="https://obr.dnd.center/studio/music-studio/" target="_blank" rel="noopener" data-mt="openStudio"></a>
+<p id="pairStatus" class="hint"></p><div class="row"><input id="pairCode" type="text" maxlength="6" autocomplete="off" data-mt-placeholder="pairCode"><button id="pair" type="button" data-mt="connect" data-shared></button><button id="unpair" type="button" data-mt="disconnect"></button></div>
+<button id="adopt" type="button" hidden data-mt="adopt" data-shared></button><p class="hint" data-mt="studioHint"></p></details>
+<label id="permission" hidden><input id="allowPlayers" type="checkbox"><span data-mt="allow"></span></label>
+</div><p id="feedback" role="status"></p></main><script type="module" src="./src/music-board-page.ts"></script></body></html>

@@ -1,0 +1,3303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PF1E角色卡 · by 瑞依</title>
+<style>
+  :root {
+    --bg:#f5f5f0; --panel:#ffffff; --border:#c0b8a8;
+    --accent:#8b4513; --accent2:#cd853f; --text:#333; --text2:#666;
+    --readonly:#f0ece0; --danger:#a52a2a; --success:#2e8b57;
+    --temp:#fff5f5; --temp-border:#d4a5a5;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.5;padding:12px 12px 96px}
+  .container{max-width:1200px;margin:0 auto}
+
+  /* 顶部栏 */
+  .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .top-bar-left{display:flex;gap:8px;align-items:center}
+  .top-bar-right{display:flex;gap:8px;align-items:center}
+
+  /* 右下角圆形视图切换按钮：固定在视口，随滚动始终跟随 */
+  .view-fab{position:fixed;right:24px;bottom:24px;width:64px;height:64px;border-radius:50%;
+    background:var(--accent);color:#fff;border:2px solid rgba(255,255,255,.75);
+    font-size:15px;font-weight:700;line-height:1;cursor:pointer;z-index:99999;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 6px 18px rgba(0,0,0,.28);transition:transform .15s ease,background .15s ease}
+  .view-fab:hover{background:var(--accent2);transform:translateY(-2px)}
+  .view-fab:active{transform:scale(.94)}
+  /* 展示模式：填充/文字颜色互换，切换时一眼可辨 */
+  .view-fab.is-display{background:#fff;color:var(--accent);border-color:var(--accent)}
+  .view-fab.is-display:hover{background:#fdf6ec;color:var(--accent2);border-color:var(--accent2)}
+  .view{display:none}
+  .view.active{display:block}
+
+  /* 板块折叠 */
+  .section{margin-bottom:12px}
+  .section-header{display:flex;justify-content:space-between;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:6px 6px 0 0;padding:8px 12px;cursor:pointer;user-select:none}
+  .section-header:hover{background:#faf8f3}
+  .section-hbtn{margin-left:auto;margin-right:10px;font-size:12px;padding:2px 10px;line-height:1.4}
+  .section-title{font-size:14px;font-weight:bold;color:var(--accent);text-transform:uppercase;letter-spacing:1px}
+  .section-toggle{font-size:12px;color:var(--text2);transition:transform .2s}
+  .section-toggle.collapsed{transform:rotate(-90deg)}
+  .section-body{background:var(--panel);border:1px solid var(--border);border-top:none;border-radius:0 0 6px 6px;padding:12px;overflow:hidden}
+  .section-body.collapsed{display:none}
+
+  /* 布局 */
+  .row{display:flex;gap:12px;margin-bottom:12px}
+  .col{flex:1;min-width:0}
+  .col-2{flex:2}
+
+  /* 表单 */
+  label{display:block;font-size:12px;color:var(--text2);margin-bottom:2px}
+  input,select,textarea{width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:3px;font-size:13px;background:#fff}
+  input[readonly],select[disabled]{background:var(--readonly);color:var(--text2)}
+  input[type="number"]{width:60px;text-align:center}
+  input[type="checkbox"]{width:auto}
+  textarea{min-height:60px;resize:vertical}
+
+  /* 属性网格 - 2x3 */
+  .ability-grid-2x3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .ability-box{text-align:center;border:1px solid var(--border);border-radius:4px;padding:6px;background:var(--readonly)}
+  .ability-box .ab-name{font-size:11px;color:var(--text2)}
+  /* 调整值在上、更大；属性值在下、更小（回到简洁版） */
+  .ability-box .ab-mod{font-size:22px;font-weight:700;color:var(--success);line-height:1.15;font-variant-numeric:tabular-nums}
+  .ability-box .ab-score{font-size:13px;font-weight:600;color:var(--accent);text-align:center}
+  /* 建卡页：属性填写框放大 */
+  #builder .ability-box .ab-score{font-size:17px;width:4.2ch;padding:6px 2px;border:1px solid var(--accent2);background:#fff;border-radius:3px}
+  /* 技能脚注与折叠按钮 */
+  .skill-note{font-size:11px;color:var(--text2);margin-top:4px;line-height:1.5}
+  /* 角色肖像：仅本地保存，不进入导出 JSON */
+  .portrait-box{flex:1;min-height:120px;background:#e8e4d8;border:2px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:12px;text-align:center;border-radius:4px;cursor:pointer;overflow:hidden}
+  .portrait-box img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+
+  /* 计算行 */
+  .calc-row{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:13px}
+  .calc-label{width:70px;font-weight:bold;flex-shrink:0}
+  .calc-auto{min-width:30px;text-align:center;color:var(--accent);font-weight:bold}
+
+  /* 紧凑信息行 */
+  .info-row{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:13px}
+  .info-row label{display:inline;margin-bottom:0;margin-right:4px}
+  .info-row input,.info-row select{display:inline;width:auto}
+  /* 建卡页：身份各行左侧标签定宽，保证输入框左缘与角色名对齐 */
+  #builder .info-row > label:first-child{width:56px;display:inline-block;flex:none;margin-right:2px}
+  /* 展示页：身份信息为纯文本，无输入框底色 */
+  .d-text{font-size:14px;font-weight:600;color:var(--text)}
+
+  /* 临时调整框 */
+  .temp-input{width:50px;text-align:center;padding:2px 4px;border:1px dashed var(--danger);background:var(--temp);border-radius:3px}
+
+  /* 职业多行 */
+  .class-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px;border:1px solid var(--border);border-radius:4px;background:#faf8f3}
+  .class-row input[type="text"]{flex:1}
+  .class-row input[type="number"]{width:60px}
+
+  /* 攻击表格 */
+  /* 攻击条：每条独立成卡 */
+  .attack-list{display:flex;flex-direction:column;gap:10px}
+  .attack-card{border:1px solid var(--border);border-radius:6px;background:#fff;padding:8px 10px}
+  .atk-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+  .atk-head .atk-weapon{flex:0 0 140px}
+  .atk-head .atk-weapon-type{flex:0 0 120px}
+  .atk-head .atk-range{flex:0 0 90px}
+  .atk-head .atk-damage-type{flex:0 0 110px}
+  .atk-row{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px 10px;font-size:12px;margin-top:6px}
+  .atk-row .fld{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .atk-row .fld-l{font-size:11px;color:var(--text2);white-space:nowrap}
+  .atk-row input,.atk-row select{width:100%}
+  .atk-row input[type="number"]{max-width:70px}
+  .atk-row input[type="text"]{max-width:110px}
+  .atk-row select{max-width:110px}
+  .atk-row .atk-val{font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;min-height:20px}
+  /* 攻击模式下拉（可多选） */
+  .mode-dd{position:relative}
+  .mode-dd summary{list-style:none;cursor:pointer;padding:3px 10px;border:1px solid var(--border);border-radius:3px;background:var(--readonly);font-size:12px;user-select:none}
+  .mode-dd summary::-webkit-details-marker{display:none}
+  .mode-dd[open] summary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .mode-menu{position:absolute;z-index:50;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.15);padding:6px 10px;display:flex;flex-direction:column;gap:4px;min-width:130px}
+  .mode-menu label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text);white-space:nowrap;margin:0}
+  /* 展示页攻击卡 */
+  .atk-out{display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:13px}
+  .atk-out b{color:var(--accent);font-size:15px}
+  .atk-mode-tag{font-size:11px;color:#fff;background:var(--accent2);padding:1px 8px;border-radius:10px}
+
+  /* 战斗开关 */
+  /* AC 公式行 */
+  .ac-block{border:1px solid var(--border);border-radius:6px;padding:10px;background:#fff}
+  .ac-line{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;font-size:12px}
+  .ac-name{font-weight:800;color:var(--accent);font-size:28px;line-height:1}
+  .ac-total{font-size:28px;font-weight:800;color:var(--accent);line-height:1}
+  .ac-op{color:var(--text2);padding-bottom:4px}
+  .ac-cell{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .ac-k{font-size:11px;color:var(--text2);white-space:nowrap}
+  .ac-cell input{width:62px;text-align:center;padding:3px}
+  .ac-ro{font-weight:700;color:var(--accent);min-height:22px;display:flex;align-items:center}
+  .ac-mini{margin-top:8px;font-size:12px;color:var(--text2)}
+  .ac-mini b{color:var(--accent);font-size:14px}
+
+  /* 数据区顶部：两行两列，每项一个 AC 同款边框 */
+  .data-top{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;align-items:stretch}
+  .data-box{border:1px solid var(--border);border-radius:6px;padding:8px 10px;background:#fff;min-width:0;display:flex;align-items:center;min-height:48px}
+  .data-box .calc-row{margin-bottom:0}
+  .data-box .init-row{margin-top:0;width:100%}
+  .data-box{font-size:13px}
+  .data-box .calc-label{font-size:13px}
+  .data-box .calc-auto,.data-box .display-final{font-size:13px;min-width:0}
+  .data-box input{font-size:13px}
+  /* BAB / 角色等级 两格贴在一起，总宽不变 */
+  .data-box.dual-box{padding:0;overflow:hidden}
+  .dual-cell{flex:1;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;min-width:0}
+  .dual-cell + .dual-cell{border-left:1px solid var(--border)}
+  .dual-cell .calc-label{font-size:13px;color:var(--text2)}
+  .dual-cell .calc-auto,.dual-cell .display-final{font-size:13px;font-weight:700;color:var(--accent)}
+  /* AC 右侧：接触 / 措手不及 */
+  .ac-flex{display:flex;align-items:center;gap:20px}
+  .ac-main{flex:1;min-width:0}
+  .ac-side{display:flex;gap:20px;align-items:center;flex:none;padding-left:16px;border-left:1px solid var(--border);align-self:stretch}
+  .ac-stat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:62px}
+  .ac-stat .k{font-size:12px;color:var(--text2);white-space:nowrap}
+  .ac-stat .v{font-size:28px;font-weight:800;color:var(--accent);line-height:1}
+  /* 技能收藏星 */
+  .fav-btn{border:none;background:transparent;cursor:pointer;font-size:16px;line-height:1;color:#b08d2e;padding:0 2px}
+  .fav-btn.on{color:#e0a800}
+  .fav-col{width:36px;text-align:center;white-space:nowrap}
+  body:not(.pf1e-viewer) .fav-col{display:none}
+  /* ===== 查看器模式：基础信息一行、紧凑、隐藏无关区块 ===== */
+  body.pf1e-viewer #d-portrait-box{display:none}
+  body.pf1e-viewer #sec-basic-display .col-2{max-width:none;width:100%}
+  body.pf1e-viewer .info-col{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;margin-bottom:10px}
+  body.pf1e-viewer .info-col .info-row{display:inline-flex;align-items:baseline;gap:6px;margin:0}
+  body.pf1e-viewer .info-col .info-row label{font-size:12px;color:var(--text2);margin:0}
+  body.pf1e-viewer .info-col .info-row .d-text{font-size:21px;font-weight:800;color:var(--text)}
+  body.pf1e-viewer .ability-grid-2x3{grid-template-columns:repeat(6,1fr);gap:6px}
+  body.pf1e-viewer .ability-box{padding:4px 4px;min-height:52px}
+  body.pf1e-viewer .ability-box .ab-name{font-size:11px}
+  body.pf1e-viewer .ability-box .ab-mod{font-size:14px}
+  body.pf1e-viewer .ability-box .ab-score{font-size:15px}
+  body.pf1e-viewer #sec-attack-display{display:none}
+  body.pf1e-viewer #sec-defense-display .dice-btn{display:none}
+  body.pf1e-viewer .dice-col{display:none}
+  .hp-num{font-size:14px;font-weight:700;color:var(--accent)}
+  .hp-extra{display:none}
+  body.pf1e-viewer .hp-num{font-size:26px;font-weight:800}
+  body.pf1e-viewer .hp-extra{display:inline-flex;align-items:baseline;gap:4px;margin-left:14px;font-size:12px;color:var(--text2)}
+  body.pf1e-viewer .hp-extra b{font-size:18px;color:var(--text)}
+  body.pf1e-viewer .skill-temp{pointer-events:auto;background:#fff;border:1px solid var(--border);border-radius:3px;color:var(--text);padding:2px 4px}
+  body.pf1e-viewer .ac-side{align-self:center}
+  /* 豁免 / CMB / CMD 表格 */
+  .stat-row{display:flex;gap:16px;align-items:flex-start;margin-top:12px}
+  .stat-row .stat-table{flex:1;min-width:0}
+  /* 先攻：仿表格排版，但无外框、无底色 */
+  .init-row{display:inline-flex;align-items:center;gap:6px;margin-top:10px;border:none;background:transparent;font-size:13px}
+  .init-row .st-label{display:inline;background:transparent;padding:0;width:70px;flex-shrink:0;font-weight:600;color:var(--text);font-size:13px}
+  .init-row .st-total{display:inline;background:transparent;color:var(--accent);font-weight:700;font-size:13px;padding:0}
+  .init-cell{display:flex;flex-direction:column;align-items:center;gap:2px;padding:0;border-left:none;margin-left:18px}
+  .init-divider{width:3px;height:30px;background:var(--accent2);border-radius:2px;margin:0 6px;flex:none}
+  .init-k{font-size:11px;color:var(--text2)}
+  .init-cell input{width:62px;text-align:center;box-sizing:border-box;padding:3px}
+  .init-cell .st-val{font-weight:700;color:var(--accent)}
+  .stat-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .stat-table th{background:var(--readonly);font-size:11px;border:1px solid var(--border);padding:4px;text-align:center;color:var(--text2)}
+  .stat-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .stat-table .st-label{background:var(--readonly);font-weight:600;color:var(--text)}
+  .stat-table .st-total{background:#fdf6e3;font-weight:700;color:var(--accent);font-size:14px}
+  .stat-table .st-val{font-weight:700;color:var(--accent)}
+  .stat-table .st-num{color:var(--text)}
+  .stat-table .st-note{color:var(--text2)}
+  .stat-table input{width:62px;box-sizing:border-box;text-align:center;font-size:12px;padding:3px}
+  .stat-table select{width:100%;box-sizing:border-box;text-align:center;font-size:12px;padding:2px}
+  /* 专长 / 特性 / 装备 / 道具：文本框不显示边框（下拉保持） */
+  #sec-feat-builder input:not([type="checkbox"]),
+  #sec-features-builder input:not([type="checkbox"]),
+  #sec-feat-display input:not([type="checkbox"]),
+  #sec-features-display input:not([type="checkbox"]),
+  #sec-armor-builder input:not([type="checkbox"]),
+  #sec-armor-display input:not([type="checkbox"]),
+  #sec-gear-builder input:not([type="checkbox"]),
+  #sec-gear-display input:not([type="checkbox"]){
+    border-color:transparent;
+    background:transparent;
+  }
+  #sec-feat-builder input:focus,
+  #sec-features-builder input:focus,
+  #sec-armor-builder input:focus,
+  #sec-gear-builder input:focus{border-color:var(--accent);background:#fff}
+
+  /* 资源记录（LV 表）：左 1-10、右 11-20，紧贴并排 */
+  .lv-split{display:flex;gap:0;align-items:flex-start}
+  .lv-split .lv-table{flex:1;min-width:0}
+  .lv-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .lv-table th{background:var(--readonly);border:1px solid var(--border);padding:4px;font-size:11px;color:var(--text);font-weight:600}
+  .lv-table .lv-th-lv{width:32px}
+  .lv-table .lv-th-ability{width:64px}
+  .lv-table td{border:1px solid var(--border);padding:2px 3px;text-align:center;height:24px}
+  .lv-table td.lv-no{width:32px;background:var(--readonly);font-weight:600}
+  .lv-table td.lv-gray{background:#eeeeee}
+  .lv-table td.lv-blue{background:#dbe6f7}
+  .lv-table input{width:100%;border-color:transparent;background:transparent;text-align:center;font-size:12px;padding:1px 2px;box-sizing:border-box}
+  .lv-table select{width:100%;font-size:12px;padding:1px 2px;border:1px solid var(--border);background:#fff;box-sizing:border-box}
+  /* 施法信息（法术页上方，无外框，靠右，下方通栏分隔线） */
+  .spell-meta{display:flex;flex-direction:column;align-items:flex-start;padding:0 0 10px;margin-bottom:14px;
+    border-bottom:2px solid var(--border)}
+  .sm-row{display:flex;align-items:center;justify-content:flex-start;gap:8px;margin-bottom:4px}
+  .sm-row:last-child{margin-bottom:0}
+  .sm-k{width:84px;text-align:left;color:var(--text);font-size:12px;font-weight:700;flex:none}
+  .sm-input{width:90px;text-align:center}
+  .sm-select{width:90px}
+  .sm-v{font-weight:700;color:var(--accent);min-width:36px;text-align:center}
+  .sm-unit{color:var(--text2);font-size:12px}
+  /* 法术页 */
+  .spell-page{margin-bottom:16px;padding-bottom:12px;border-bottom:1px dashed var(--border)}
+  .spell-page:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .spell-page-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
+  .spell-page-title{font-weight:700;color:var(--accent)}
+  /* 法术位徽章：数量 = 每日数字 */
+  .slot-badges{display:inline-flex;gap:10px;margin-left:12px;flex-wrap:wrap;vertical-align:middle}
+  .slot-chip{border:1px solid #1f5a30;background:#2f6b3f;color:#fff;border-radius:999px;font-size:14px;font-weight:700;padding:0 14px;height:30px;min-width:52px;box-sizing:border-box;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;text-align:center;line-height:1.1;white-space:nowrap}
+  .slot-chip.off{background:#fff;color:#2f6b3f;border-color:#2f6b3f}
+  .slot-chip-edit{cursor:text;text-align:center;padding:0 8px;height:30px;min-width:52px;width:52px;color:#fff;font-size:14px;font-weight:700;border-radius:999px}
+  /* 法术位数字去掉上下箭头 */
+  #spell-pages input[type="number"],#d-spell-pages input[type="number"]{appearance:textfield;-moz-appearance:textfield}
+  #spell-pages input[type="number"]::-webkit-outer-spin-button,
+  #spell-pages input[type="number"]::-webkit-inner-spin-button,
+  #d-spell-pages input[type="number"]::-webkit-outer-spin-button,
+  #d-spell-pages input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .pool-cur-input{width:44px;text-align:center;padding:1px 3px;font-size:12px;box-sizing:border-box}
+
+  /* 装备：护甲 / 盾牌（并排） */
+  .equip-row{display:flex;gap:14px;align-items:flex-start}
+  .equip-row .equip-table{flex:1;min-width:0;margin-bottom:0}
+  .equip-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;margin-bottom:14px}
+  .equip-table td{border:1px solid var(--border);padding:2px 3px;text-align:center;height:26px}
+  .equip-table .eq-label{background:var(--readonly);font-weight:600;width:56px}
+  .equip-table .eq-top{text-align:right;padding-right:6px}
+  .eq-top-inner{display:flex;align-items:center;gap:10px;justify-content:space-between;height:22px}
+  .eq-top-inner > span{display:flex;align-items:center;gap:6px;color:var(--text2);white-space:nowrap}
+  .eq-top-inner input[type="text"]{width:110px;text-align:left;height:22px;box-sizing:border-box;padding:1px 4px}
+  .eq-top-inner select{width:auto;min-width:72px;height:22px;box-sizing:border-box;padding:0 4px;display:inline-block}
+  .eq-name-text{font-weight:600;color:var(--text)}
+  .equip-table .eq-head td{background:var(--readonly);color:var(--text2);font-size:11px;font-weight:600}
+  .equip-table input,.equip-table select{width:100%;box-sizing:border-box;text-align:center;font-size:12px;padding:3px}
+  .asf-wrap{display:inline-flex;align-items:center;justify-content:center;gap:2px;white-space:nowrap;width:100%}
+  .asf-wrap input{width:100%}
+  /* 数字输入框去掉上下箭头 */
+  .equip-table input[type="number"]{appearance:textfield;-moz-appearance:textfield}
+  .equip-table input[type="number"]::-webkit-outer-spin-button,
+  .equip-table input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+  /* 技能布局 */
+  .skill-cols{display:flex;gap:12px;align-items:flex-start}
+  .skill-col{flex:1;min-width:0}
+  .skill-cols .skill-name{text-align:center}
+  .skill-note{font-size:11px;color:var(--text2);margin-top:6px;line-height:1.5}
+  .skill-warn{display:none;color:#ff0000;font-weight:700;font-size:20px;margin-top:8px}
+  /* 编辑模式：每个模块外围紧贴一层加粗虚线框 */
+  #builder .section{outline:2px dashed var(--accent2);outline-offset:0}
+  .skill-pool-bar{display:flex;gap:12px;margin-bottom:8px;font-size:13px;padding:8px;background:var(--readonly);border-radius:4px;flex-wrap:wrap}
+  .skill-pool-bar .pool{font-weight:bold}
+  .skill-pool-bar .pool span{color:var(--accent)}
+  .skill-table{width:100%;border-collapse:collapse;font-size:12px}
+  .skill-table th,.skill-table td{border:1px solid var(--border);padding:3px 4px;text-align:center}
+  .skill-table th{background:var(--readonly);font-size:11px}
+  .skill-table td input{width:40px;text-align:center;padding:1px}
+  .skill-table .skill-name{text-align:center;font-weight:500}
+  .skill-table .class-skill{color:var(--accent);font-weight:bold}
+
+  /* 法术位 */
+  .spell-slot-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:13px}
+  .spell-slot-row .slot-level{width:40px;font-weight:bold}
+  .spell-slot-row .slot-value{width:35px;text-align:center}
+
+  /* 能力池 */
+  /* 能力池：一行一个 */
+  .pool-row{display:block;margin-bottom:0}
+  .pool-item{display:flex;gap:8px;align-items:center;padding:5px 6px;border:1px solid var(--border);border-radius:4px;margin-bottom:8px;min-width:0}
+  .pool-item .pool-name{width:6em;flex:none;box-sizing:border-box}
+  .pool-item .pool-counter{display:flex;align-items:center;gap:4px;flex:none}
+  .pool-item .pool-counter input{width:44px;text-align:center;box-sizing:border-box}
+  .pool-item .pool-desc{flex:1;min-width:0}
+  .pool-item input[type="number"]{appearance:textfield;-moz-appearance:textfield}
+  .pool-item input[type="number"]::-webkit-outer-spin-button,
+  .pool-item input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .pool-item .pool-name-ro{width:6em;flex:none;font-weight:600}
+  .pool-item .pool-counter-ro{flex:none;color:var(--accent);font-weight:700}
+  .pool-item .pool-desc-ro{flex:1;min-width:0;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pool-counter{display:flex;align-items:center;gap:4px;font-weight:bold}
+  .pool-counter input{width:45px}
+
+  /* 装备 */
+  .gear-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .gear-table th,.gear-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .gear-table th{background:var(--readonly);font-size:11px}
+  .gear-table .g-qty{width:8%}
+  .gear-table .g-slot{width:13%}
+  .gear-table .g-wt{width:10%}
+  .gear-table .g-val{width:10%}
+  .gear-table .g-act{width:56px}
+  .gear-table td input{width:100%;box-sizing:border-box;padding:2px 4px}
+  .gear-table td input[type="number"]{text-align:center}
+  .gear-table td select{width:100%;font-size:11px;padding:2px}
+  /* 钱袋 + 卷轴/药水/魔杖 */
+  .purse-row{display:flex;gap:12px;align-items:flex-start;margin-top:12px}
+  .coin-purse,.scroll-box,.load-box{flex:1 1 0;min-width:0}
+  .coin-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .coin-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .coin-table .coin-name{background:var(--readonly);color:var(--text);width:40%;font-weight:600}
+  .coin-table .coin-amt{text-align:right;color:var(--text);font-weight:400}
+  .coin-table .coin-amt input{width:70px;text-align:right;border:1px solid var(--border);padding:2px 4px;font-weight:400;color:var(--text);box-sizing:border-box}
+  .coin-table .coin-unit{margin-left:4px;color:var(--text2);font-weight:400}
+  .coin-table .coin-w{width:64px;text-align:center;color:var(--text);font-weight:400}
+  .coin-table .coin-cash .coin-name{background:var(--readonly)}
+  .coin-table .coin-cash .coin-amt{background:#fff}
+  
+  .box-title{background:var(--readonly);border:1px solid var(--border);border-bottom:none;padding:4px;text-align:center;font-weight:700;font-size:12px;color:var(--accent)}
+  .scroll-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .scroll-table th,.scroll-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .scroll-table th{background:var(--readonly);font-size:11px}
+  .scroll-table th:first-child,.scroll-table td:first-child{width:40%}
+  .scroll-table .s-act{width:40px}
+  .scroll-table td input{width:100%;box-sizing:border-box;padding:2px 4px}
+  /* 负重 */
+  
+  .load-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .load-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .load-table .load-k{background:var(--readonly);width:40%;font-weight:600}
+  .load-table .load-v{color:var(--text)}
+  .load-table select,.load-table input{width:100%;box-sizing:border-box;font-size:12px;padding:2px}
+
+  /* 专长/特性 */
+  .feat-table,.ability-line-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .feat-table th,.feat-table td,.ability-line-table th,.ability-line-table td{border:1px solid var(--border);padding:4px;text-align:center}
+  .feat-table th,.ability-line-table th{background:var(--readonly);font-size:11px}
+  .feat-table td input[type="text"],.ability-line-table td input[type="text"]{width:100%;padding:2px 4px;box-sizing:border-box}
+  .ability-line-table td select{width:100%;box-sizing:border-box;padding:2px 2px;font-size:12px}
+  .ability-line-table .col-source{width:12%}
+  .ability-line-table .col-name{width:12%}
+  .ability-line-table .col-desc{width:auto}
+  .ability-line-table .col-act{width:56px;text-align:center}
+  /* 特性筛选：刚好容纳 5 个汉字 */
+  #feature-filter{width:7.2em}
+
+  /* 骰子按钮 */
+  .dice-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:3px;border:1px solid var(--border);background:var(--readonly);cursor:pointer;font-size:11px;color:var(--accent);margin-left:4px;vertical-align:middle}
+  .dice-btn:hover{background:var(--accent);color:#fff}
+  .dice-btn:active{transform:scale(.92)}
+
+  /* 轻提示：点击骰子复制表达式后浮出，自动消失，不需要确认 */
+  .toast{position:fixed;left:50%;bottom:36px;transform:translateX(-50%) translateY(12px);background:rgba(30,30,30,.92);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;line-height:1.4;box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transition:opacity .18s ease,transform .18s ease;z-index:99999;pointer-events:none;max-width:80vw;text-align:center}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* 展示只读 */
+  .display-final{font-size:16px;font-weight:bold;color:var(--danger);min-width:40px;text-align:center}
+
+  /* 按钮 */
+  .btn{padding:4px 10px;background:var(--accent2);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px}
+  .btn:hover{background:var(--accent)}
+  .btn-add{background:var(--success)}
+  .btn-add:hover{background:#3aa06a}
+  .btn-export{background:#2b6cb0}
+  .btn-export:hover{background:#3a83cf}
+  .btn-import{background:var(--accent2)}
+  .btn-import:hover{background:#e0a060}
+  .btn-del{background:var(--danger)}
+  .btn-sm{padding:2px 6px;font-size:11px}
+
+  /* 响应式 */
+  @media(max-width:900px){
+    .row{flex-direction:column}
+    .ability-grid-2x3{grid-template-columns:repeat(3,1fr)}
+  }
+
+  /* ===== PF1E 查看器模式（OBR 角色卡 iframe，只读） ===== */
+  body.pf1e-viewer{padding:8px 10px 24px}
+  body.pf1e-viewer .top-bar,
+  body.pf1e-viewer #viewFab,
+  body.pf1e-viewer .btn,
+  body.pf1e-viewer .toast{display:none !important}
+  body.pf1e-viewer input,
+  body.pf1e-viewer select,
+  body.pf1e-viewer textarea{pointer-events:none;background:transparent}
+  body.pf1e-viewer #pf-view-error{padding:18px;font-size:13px;color:#c0392b}
+
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- 顶部栏 -->
+  <div class="top-bar">
+    <div class="top-bar-left"></div>
+    <div class="top-bar-right">
+      <button class="btn btn-add btn-sm" onclick="saveCharacterLocal()">💾 保存角色</button>
+      <button class="btn btn-export btn-sm" onclick="exportCharacter()">📤 导出角色</button>
+      <button class="btn btn-import btn-sm" onclick="importCharacter()">📂 读取角色</button>
+      <input type="file" id="import-file" style="display:none" accept=".json" onchange="handleImport(event)">
+      <input type="file" id="portrait-file" style="display:none" accept="image/*" onchange="handlePortrait(event)">
+    </div>
+  </div>
+
+  <!-- ==================== 建卡/升级界面 ==================== -->
+  <div id="builder" class="view active">
+
+    <!-- 基础属性 -->
+    <div class="section" id="sec-basic-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">基础属性</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="row" style="margin-bottom:0">
+          <!-- 左侧：基础信息 + 属性 -->
+          <div class="col col-2">
+            <!-- 上：基础信息 -->
+            <div class="row" style="margin-bottom:8px">
+              <div class="col info-col">
+                <div class="info-row"><label>角色名</label><input type="text" id="b-name" value="" style="flex:1"></div>
+                <div class="info-row"><label>玩家</label><input type="text" id="b-player" value="" style="flex:1"></div>
+                <div class="info-row">
+                  <label>职业</label>
+                  <div id="class-rows" style="flex:1">
+                    <div class="class-row" data-index="0" style="margin-bottom:0">
+                      <input type="text" class="cls-name" value="" placeholder="职业名" onchange="render()" style="width:120px">
+                      <input type="text" class="cls-variant" value="" placeholder="变体" onchange="render()" style="width:70px;margin-left:-6px">
+                      <input type="number" class="cls-level" value="1" min="1" max="20" onchange="render()" style="width:50px">
+                      <button class="btn btn-del btn-sm" onclick="this.parentElement.remove();render()">×</button>
+                    </div>
+                  </div>
+                  <button class="btn btn-add btn-sm" onclick="addClassRow()" title="新增职业" style="margin-left:6px;flex:none">+</button>
+                </div>
+                <div class="info-row">
+                  <label>种族</label>
+                  <input type="text" id="b-race" value="" placeholder="种族" onchange="render()" style="width:110px">
+                  <label style="margin-left:12px">阵营</label>
+                  <input type="text" id="b-align" value="" style="width:60px">
+                </div>
+                <div class="info-row">
+                  <label>速度</label>
+                  <input type="number" id="b-speed" value="" min="0" style="width:70px" onchange="render()" title="移动速度（尺）">
+                  <span style="margin-left:6px;color:var(--text2)">尺</span>
+                  <label style="margin-left:12px">奔跑速度</label>
+                  <span class="calc-auto" id="b-run-speed">—</span>
+                </div>
+              </div>
+            </div>
+            <!-- 下：六维属性 2x3 -->
+            <div class="ability-grid-2x3">
+              <div class="ability-box">
+                <div class="ab-name">力量 STR</div>
+                <div class="ab-mod" id="mod-str">+0</div>
+                <input type="number" class="ab-score" id="ab-str" value="10" min="1" max="50" onchange="render()">
+              </div>
+              <div class="ability-box">
+                <div class="ab-name">敏捷 DEX</div>
+                <div class="ab-mod" id="mod-dex">+0</div>
+                <input type="number" class="ab-score" id="ab-dex" value="10" min="1" max="50" onchange="render()">
+              </div>
+              <div class="ability-box">
+                <div class="ab-name">体质 CON</div>
+                <div class="ab-mod" id="mod-con">+0</div>
+                <input type="number" class="ab-score" id="ab-con" value="10" min="1" max="50" onchange="render()">
+              </div>
+              <div class="ability-box">
+                <div class="ab-name">智力 INT</div>
+                <div class="ab-mod" id="mod-int">+0</div>
+                <input type="number" class="ab-score" id="ab-int" value="10" min="1" max="50" onchange="render()">
+              </div>
+              <div class="ability-box">
+                <div class="ab-name">感知 WIS</div>
+                <div class="ab-mod" id="mod-wis">+0</div>
+                <input type="number" class="ab-score" id="ab-wis" value="10" min="1" max="50" onchange="render()">
+              </div>
+              <div class="ability-box">
+                <div class="ab-name">魅力 CHA</div>
+                <div class="ab-mod" id="mod-cha">+0</div>
+                <input type="number" class="ab-score" id="ab-cha" value="10" min="1" max="50" onchange="render()">
+              </div>
+            </div>
+          </div>
+          <!-- 右侧：肖像 -->
+          <div class="col" style="max-width:280px;display:flex;flex-direction:column;gap:8px">
+            <div id="portrait-box" class="portrait-box" onclick="pickPortrait()" title="点击上传角色肖像（仅本地保存，不导出）">
+              <img id="portrait-img" alt="" style="display:none">
+              <div id="portrait-hint">[角色肖像]<br>点击上传<br>&lt;2MB<br><span style="font-size:10px">仅本地</span></div>
+            </div>
+            <button class="btn btn-import btn-sm" onclick="clearPortrait()" title="移除当前肖像">清除肖像</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据 -->
+    <div class="section" id="sec-defense-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">数据</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <!-- 两行两列：最大HP / 视觉、BAB / 先攻（各自加 AC 同款边框） -->
+        <div class="data-top">
+          <div class="data-box">
+            <div class="calc-row">
+              <span class="calc-label">最大HP</span>
+              <input type="number" id="b-hp-max" value="" min="0" style="width:90px" onchange="render()" title="手填最大生命">
+            </div>
+          </div>
+          <div class="data-box">
+            <div class="calc-row">
+              <span class="calc-label">视觉</span>
+              <input type="text" id="b-vision-base" value="" placeholder="如：黑暗视觉60尺" style="width:160px">
+            </div>
+          </div>
+          <div class="data-box">
+            <div class="calc-row">
+              <span class="calc-label">BAB</span>
+              <input type="number" id="b-bab" value="" style="width:90px" onchange="render()" title="基础攻击加值，手填">
+            </div>
+          </div>
+          <div class="data-box">
+            <div class="init-row">
+              <span class="st-label">先攻</span>
+              <span class="st-total" id="b-init-final">+0</span>
+              <span class="init-divider"></span>
+              <span class="init-cell"><span class="init-k">专长</span><input type="number" id="b-init-feat" value="" onchange="render()"></span>
+              <span class="init-cell"><span class="init-k">其他</span><input type="number" id="b-init-misc" value="" onchange="render()"></span>
+              <span class="init-cell"><span class="init-k">属性</span><span class="st-val" id="b-init-attr">+0</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- AC 公式 -->
+        <div class="ac-block">
+          <div class="ac-flex">
+          <div class="ac-main">
+          <div class="ac-line">
+            <span class="ac-name">AC</span>
+            <span class="ac-total" id="b-ac-final">10</span>
+            <span class="ac-op">=</span>
+            <span class="ac-cell"><span class="ac-k">护甲</span><span class="ac-ro" id="b-armor">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">盾牌</span><span class="ac-ro" id="b-shield">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">天生防御</span><input type="number" id="b-nat" value="" onchange="render()"></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">闪避</span><input type="number" id="b-dodge" value="" onchange="render()"></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">偏斜</span><input type="number" id="b-deflect" value="" onchange="render()"></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">体型</span><span class="ac-ro" id="b-size-final">+0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">属性</span><span class="ac-ro" id="b-dex-final">+0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">其他</span><input type="number" id="b-ac-misc" value="" onchange="render()"></span>
+          </div>
+          </div>
+          <div class="ac-side">
+            <div class="ac-stat"><span class="k">接触 AC</span><span class="v" id="b-touch-final">10</span></div>
+            <div class="ac-stat"><span class="k">措手不及</span><span class="v" id="b-flat-final">10</span></div>
+          </div>
+          </div>
+        </div>
+
+        <div class="stat-row">
+        <table class="stat-table">
+          <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>基础</th><th>其他</th><th>属性</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="st-label">强韧豁免</td><td class="st-total" id="b-fort-final">+0</td>
+              <td><input type="number" id="b-fort-base" value="" onchange="render()"></td>
+              <td><input type="number" id="b-fort-other" value="" onchange="render()"></td>
+              <td class="st-val" id="b-fort-attr">+0</td>
+            </tr>
+            <tr>
+              <td class="st-label">反射豁免</td><td class="st-total" id="b-ref-final">+0</td>
+              <td><input type="number" id="b-ref-base" value="" onchange="render()"></td>
+              <td><input type="number" id="b-ref-other" value="" onchange="render()"></td>
+              <td class="st-val" id="b-ref-attr">+0</td>
+            </tr>
+            <tr>
+              <td class="st-label">意志豁免</td><td class="st-total" id="b-will-final">+0</td>
+              <td><input type="number" id="b-will-base" value="" onchange="render()"></td>
+              <td><input type="number" id="b-will-other" value="" onchange="render()"></td>
+              <td class="st-val" id="b-will-attr">+0</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table class="stat-table">
+          <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>其他</th><th>BAB</th><th>属性</th><th style="width:130px">关键属性</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="st-label">CMB</td><td class="st-total" id="b-cmb-final">0</td>
+              <td><input type="number" id="b-cmb-other" value="" onchange="render()"></td>
+              <td class="st-val" id="b-cmb-bab">+0</td>
+              <td class="st-val" id="b-cmb-attr">+0</td>
+              <td><select id="b-cmb-ability" onchange="render()">
+                <option value="str">力量</option><option value="dex">敏捷</option><option value="con">体质</option>
+                <option value="int">智力</option><option value="wis">感知</option><option value="cha">魅力</option>
+              </select></td>
+            </tr>
+            <tr>
+              <td class="st-label">CMD</td><td class="st-total" id="b-cmd-final">10</td>
+              <td><input type="number" id="b-cmd-other" value="" onchange="render()"></td>
+              <td class="st-val" id="b-cmd-bab">+0</td>
+              <td class="st-val" id="b-cmd-attr">+0</td>
+              <td class="st-note">（+10）</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+
+        <div style="margin-top:12px">
+          <label>其他防御特性</label>
+          <input type="text" id="b-special-def" placeholder="如：反射闪避，免疫毒素，DR 5/魔法">
+        </div>
+      </div>
+    </div>
+
+    <!-- 攻击 -->
+    <div class="section" id="sec-attack-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">攻击</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div id="attack-list" class="attack-list"></div>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" style="white-space:nowrap" onclick="addAttackRow()">+ 新增攻击条</button>
+        </div>
+        <div style="margin-top:10px">
+          <label>特殊攻击</label>
+          <textarea id="b-special-atk" placeholder="如：炼金炸弹 2d6+4 火焰，偷袭攻击+2d6，灵感+1d6"></textarea>
+        </div>
+      </div>
+    </div>
+
+
+
+
+
+    <!-- 能力池 -->
+    <div class="section" id="sec-pool-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">能力池</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div id="pool-builder" class="pool-grid"></div>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" onclick="addPoolRow()">+ 新增能力</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- 技能 -->
+    <div class="section" id="sec-skill-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">技能</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="skill-pool-bar">
+          <div class="pool"><span id="pool-skill">剩余 0 / 总计 </span><input type="number" id="b-skill-total" value="0" min="0" style="width:70px" onchange="render()" title="手填可分配技能点总数"></div>
+        </div>
+        <div class="skill-cols">
+          <div class="skill-col">
+            <table class="skill-table" id="skill-table-a">
+              <thead><tr><th style="text-align:left;width:30%">技能</th><th>属性</th><th>本职</th><th>等级</th><th>调整</th><th>总值</th></tr></thead>
+              <tbody id="skill-tbody-a"></tbody>
+            </table>
+          </div>
+          <div class="skill-col">
+            <table class="skill-table" id="skill-table-b">
+              <thead><tr><th style="text-align:left;width:30%">技能</th><th>属性</th><th>本职</th><th>等级</th><th>调整</th><th>总值</th></tr></thead>
+              <tbody id="skill-tbody-b"></tbody>
+            </table>
+            <div class="skill-note">* 表示该技能会受到“防具减值”的影响；（）表示该技能必须受训才能使用</div>
+          </div>
+        </div>
+        <div id="skill-warn" class="skill-warn">技能等级超出角色等级！</div>
+      </div>
+    </div>
+
+
+
+    <!-- 法术 -->
+    <div class="section" id="sec-spell-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">法术</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="spell-meta">
+          <div class="sm-row"><span class="sm-k">CL</span>
+            <input type="number" id="b-spell-cl" class="sm-input" onchange="render()"></div>
+          <div class="sm-row"><span class="sm-k">关键属性</span>
+            <select id="b-spell-ability" class="sm-select" onchange="render()">
+              <option value="int">智力</option><option value="wis">感知</option><option value="cha">魅力</option>
+              <option value="str">力量</option><option value="dex">敏捷</option><option value="con">体质</option>
+            </select>
+            <span class="sm-v" id="b-spell-ability-score">10</span></div>
+          <div class="sm-row"><span class="sm-k">失败率</span>
+            <span class="sm-v" id="b-spell-failure">0</span><span class="sm-unit">%</span></div>
+          <div class="sm-row"><span class="sm-k">基础DC</span>
+            <span class="sm-v" id="b-spell-dc">10</span></div>
+        </div>
+        <div id="spell-pages"></div>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" onclick="addSpellPage()">+ 增加法术页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 专长 -->
+    <div class="section" id="sec-feat-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">专长</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <table class="ability-line-table" id="feat-table">
+          <thead>
+            <tr><th class="col-source">来源</th><th class="col-name">名称</th><th class="col-desc">概述</th><th class="col-act">操作</th></tr>
+          </thead>
+          <tbody id="feat-tbody"></tbody>
+        </table>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" style="white-space:nowrap" onclick="addFeatRow()">+ 新增专长</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- 种族 & 职业 & 背景特性 -->
+    <div class="section" id="sec-features-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">种族&amp;职业&amp;背景特性</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+          <select id="feature-filter" onchange="renderFeatures()">
+            <option value="all">全部显示</option>
+            <option value="种族特性">种族特性</option>
+            <option value="职业特性">职业特性</option>
+            <option value="背景特性">背景特性</option>
+            <option value="缺陷">缺陷</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <table class="ability-line-table" id="feature-table">
+          <thead>
+            <tr><th class="col-source">来源</th><th class="col-name">名称</th><th class="col-desc">概述</th><th class="col-act">操作</th></tr>
+          </thead>
+          <tbody id="feature-tbody"></tbody>
+        </table>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" style="white-space:nowrap" onclick="addFeatureRow()">+ 新增特性</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- 装备：护甲 / 盾牌 -->
+    <div class="section" id="sec-armor-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">装备</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="equip-row">
+          <!-- 护甲 -->
+          <table class="equip-table" id="armor-table">
+            <tbody>
+              <tr>
+                <td class="eq-label">护甲</td>
+                <td colspan="5" class="eq-top">
+                  <div class="eq-top-inner">
+                    <input type="text" id="b-armor-name" value="" placeholder="护甲名称">
+                    <span>类型 <select id="b-armor-type">
+                      <option>轻甲</option><option>中甲</option><option selected>重甲</option>
+                    </select></span>
+                  </div>
+                </td>
+              </tr>
+              <tr class="eq-head"><td>价格</td><td>AC</td><td>最大敏捷</td><td>技能减值</td><td>法术失败</td><td>重量</td></tr>
+              <tr>
+                <td><input type="number" id="b-armor-price" value="" onchange="render()"></td>
+                <td><input type="number" id="b-armor-ac" value="" onchange="render()"></td>
+                <td><input type="number" id="b-armor-maxdex" value="" onchange="render()"></td>
+                <td><input type="number" id="b-armor-acp" value="" title="填写正数" onchange="render()"></td>
+                <td><span class="asf-wrap"><input type="number" id="b-armor-asf" value="" onchange="render()">%</span></td>
+                <td><input type="number" id="b-armor-weight" value="" onchange="render()"></td>
+              </tr>
+              <tr>
+                <td class="eq-label">特性</td>
+                <td colspan="5"><input type="text" id="b-armor-note" value=""></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- 盾牌 -->
+          <table class="equip-table" id="shield-table">
+            <tbody>
+              <tr>
+                <td class="eq-label">盾牌</td>
+                <td colspan="4" class="eq-top">
+                  <div class="eq-top-inner">
+                    <input type="text" id="b-shield-name" value="" placeholder="盾牌名称">
+                  </div>
+                </td>
+              </tr>
+              <tr class="eq-head"><td>价格</td><td>AC</td><td>技能减值</td><td>法术失败</td><td>重量</td></tr>
+              <tr>
+                <td><input type="number" id="b-shield-price" value="" onchange="render()"></td>
+                <td><input type="number" id="b-shield-ac" value="" onchange="render()"></td>
+                <td><input type="number" id="b-shield-acp" value="" title="填写正数" onchange="render()"></td>
+                <td><span class="asf-wrap"><input type="number" id="b-shield-asf" value="" onchange="render()">%</span></td>
+                <td><input type="number" id="b-shield-weight" value="" onchange="render()"></td>
+              </tr>
+              <tr>
+                <td class="eq-label">特性</td>
+                <td colspan="4"><input type="text" id="b-shield-note" value=""></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 道具 -->
+    <div class="section" id="sec-gear-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">道具</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <table class="gear-table" id="gear-table">
+          <thead>
+            <tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">价值(gp)</th><th>备注</th><th class="g-act">操作</th></tr>
+          </thead>
+          <tbody id="gear-tbody"></tbody>
+        </table>
+        <div style="margin-top:6px">
+          <button class="btn btn-add btn-sm" style="white-space:nowrap" onclick="addGearRow()">+ 新增物品</button>
+        </div>
+        <div class="purse-row">
+          <!-- 钱袋 -->
+          <div class="coin-purse">
+            <div class="box-title">钱袋</div>
+            <table class="coin-table">
+              <tbody>
+                <tr><td class="coin-name">白金币</td><td class="coin-amt"><input type="number" class="coin-input" id="coin-pp" value="" min="0" onchange="render()"><span class="coin-unit">Pp</span></td><td class="coin-w" id="cw-pp">0</td></tr>
+                <tr><td class="coin-name">金币</td><td class="coin-amt"><input type="number" class="coin-input" id="coin-gp" value="" min="0" onchange="render()"><span class="coin-unit">Gp</span></td><td class="coin-w" id="cw-gp">0</td></tr>
+                <tr><td class="coin-name">银币</td><td class="coin-amt"><input type="number" class="coin-input" id="coin-sp" value="" min="0" onchange="render()"><span class="coin-unit">Sp</span></td><td class="coin-w" id="cw-sp">0</td></tr>
+                <tr><td class="coin-name">铜币</td><td class="coin-amt"><input type="number" class="coin-input" id="coin-cp" value="" min="0" onchange="render()"><span class="coin-unit">Cp</span></td><td class="coin-w" id="cw-cp">0</td></tr>
+                <tr class="coin-cash"><td class="coin-name">现金</td><td class="coin-amt"><span id="coin-total">0.00</span><span class="coin-unit">G</span></td><td class="coin-w" id="cw-total">0</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 卷轴 / 药水 / 魔杖（无重量） -->
+          <div class="scroll-box">
+            <div class="box-title">卷轴/药水/魔杖</div>
+            <table class="scroll-table" id="scroll-table">
+              <thead>
+                <tr><th>法术名</th><th class="s-lv">环</th><th class="s-cl">CL</th><th class="s-qty">数量</th><th class="s-act">操作</th></tr>
+              </thead>
+              <tbody id="scroll-tbody"></tbody>
+            </table>
+            <div style="margin-top:6px">
+              <button class="btn btn-add btn-sm" style="white-space:nowrap" onclick="addScrollRow()">+ 新增卷轴/药水/魔杖</button>
+            </div>
+          </div>
+
+          <!-- 负重 -->
+          <div class="load-box">
+            <div class="box-title">负重</div>
+            <table class="load-table">
+              <tbody>
+                <tr><td class="load-k">总价值</td><td class="load-v"><span id="total-value">0</span> gp</td></tr>
+                <tr><td class="load-k">总重量</td><td class="load-v"><span id="total-weight">0</span> 磅</td></tr>
+                <tr><td class="load-k">负重体型</td><td class="load-v">
+                  <select id="load-size" onchange="render()">
+                    <option>超微型（二足）</option><option>超微型（四足）</option>
+                    <option>微型（二足）</option><option>微型（四足）</option>
+                    <option>超小型（二足）</option><option>超小型（四足）</option>
+                    <option>小型（二足）</option><option>小型（四足）</option>
+                    <option selected>中型（二足）</option><option>中型（四足）</option>
+                    <option>大型（二足）</option><option>大型（四足）</option>
+                    <option>超大型（二足）</option><option>超大型（四足）</option>
+                    <option>巨型（二足）</option><option>巨型（四足）</option>
+                    <option>超巨型（二足）</option><option>超巨型（四足）</option>
+                  </select></td></tr>
+                <tr><td class="load-k">额外负重</td><td class="load-v"><input type="number" id="load-enh" value="" min="0" max="60" step="1" onchange="render()"></td></tr>
+                <tr><td class="load-k">轻载</td><td class="load-v"><span id="load-l">0</span> 磅</td></tr>
+                <tr><td class="load-k">中载</td><td class="load-v"><span id="load-m">0</span> 磅</td></tr>
+                <tr><td class="load-k">重载</td><td class="load-v"><span id="load-h">0</span> 磅</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 资源记录 -->
+    <div class="section" id="sec-levels-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">资源记录</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="lv-split">
+          <table class="lv-table">
+            <thead><tr><th class="lv-th-lv">LV</th><th class="lv-th-ability">属性提升</th><th>职业</th><th>变体</th><th>专长</th><th>天赋职业奖励</th></tr></thead>
+            <tbody id="lv-tbody-a"></tbody>
+          </table>
+          <table class="lv-table">
+            <thead><tr><th class="lv-th-lv">LV</th><th class="lv-th-ability">属性提升</th><th>职业</th><th>变体</th><th>专长</th><th>天赋职业奖励</th></tr></thead>
+            <tbody id="lv-tbody-b"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 角色背景（单独一栏，放在最下面） -->
+    <div class="section" id="sec-background-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">角色背景</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <textarea id="b-background" style="min-height:120px;resize:vertical" placeholder="角色背景故事..."></textarea>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ==================== 展示/战斗界面 ==================== -->
+  <div id="display" class="view">
+
+    <!-- 基础属性 -->
+    <div class="section" id="sec-basic-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">基础属性</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="row" style="margin-bottom:0">
+          <div class="col col-2">
+            <div class="row" style="margin-bottom:8px">
+              <div class="col info-col">
+                <div class="info-row"><label>角色名</label><span class="d-text" id="d-name">—</span></div>
+                <div class="info-row"><label>玩家</label><span class="d-text" id="d-player">—</span></div>
+                <div class="info-row"><label>职业</label><span class="d-text" id="d-class">—</span></div>
+                <div class="info-row">
+                  <label>种族</label><span class="d-text" id="d-race">—</span>
+                  <label style="margin-left:12px">阵营</label><span class="d-text" id="d-align">—</span>
+                </div>
+                <div class="info-row">
+                  <label>速度</label><span class="d-text" id="d-speed">—</span>
+                  <label style="margin-left:12px">奔跑速度</label><span class="d-text" id="d-run-speed">—</span>
+                </div>
+              </div>
+            </div>
+            <div class="ability-grid-2x3">
+              <div class="ability-box"><div class="ab-name">力量</div><div class="ab-mod" id="d-mod-str">+0</div><div class="ab-score" id="d-str">10</div></div>
+              <div class="ability-box"><div class="ab-name">敏捷</div><div class="ab-mod" id="d-mod-dex">+0</div><div class="ab-score" id="d-dex">10</div></div>
+              <div class="ability-box"><div class="ab-name">体质</div><div class="ab-mod" id="d-mod-con">+0</div><div class="ab-score" id="d-con">10</div></div>
+              <div class="ability-box"><div class="ab-name">智力</div><div class="ab-mod" id="d-mod-int">+0</div><div class="ab-score" id="d-int">10</div></div>
+              <div class="ability-box"><div class="ab-name">感知</div><div class="ab-mod" id="d-mod-wis">+0</div><div class="ab-score" id="d-wis">10</div></div>
+              <div class="ability-box"><div class="ab-name">魅力</div><div class="ab-mod" id="d-mod-cha">+0</div><div class="ab-score" id="d-cha">10</div></div>
+            </div>
+          </div>
+          <div class="col" style="max-width:280px;display:flex;flex-direction:column;gap:8px">
+            <div id="d-portrait-box" class="portrait-box" style="cursor:default">
+              <img id="d-portrait-img" alt="" style="display:none">
+              <div id="d-portrait-hint">[角色肖像]</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据 -->
+    <div class="section" id="sec-defense-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">数据</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="data-top">
+          <div class="data-box">
+            <div class="calc-row"><span class="calc-label">最大HP</span><span class="hp-num" id="d-hp-max">0</span></div>
+          </div>
+          <div class="data-box">
+            <div class="calc-row"><span class="calc-label">视觉</span><span class="calc-auto" id="d-vision">—</span></div>
+          </div>
+          <div class="data-box">
+            <div class="calc-row"><span class="calc-label">BAB</span><span class="calc-auto" id="d-bab">+0</span></div>
+          </div>
+          <div class="data-box">
+            <div class="init-row">
+              <span class="st-label">先攻</span>
+              <span class="st-total" id="d-init-final">+0</span>
+              <span class="init-divider"></span>
+              <span class="init-cell"><span class="init-k">专长</span><span class="st-val" id="d-init-feat">0</span></span>
+              <span class="init-cell"><span class="init-k">其他</span><span class="st-val" id="d-init-misc">0</span></span>
+              <span class="init-cell"><span class="init-k">属性</span><span class="st-val" id="d-init-attr">+0</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ac-block">
+          <div class="ac-flex">
+          <div class="ac-main">
+          <div class="ac-line">
+            <span class="ac-name">AC</span>
+            <span class="ac-total" id="d-ac-final">10</span>
+            <span class="ac-op">=</span>
+            <span class="ac-cell"><span class="ac-k">护甲</span><span class="ac-ro" id="d-armor">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">盾牌</span><span class="ac-ro" id="d-shield">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">天生防御</span><span class="ac-ro" id="d-nat">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">闪避</span><span class="ac-ro" id="d-dodge">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">偏斜</span><span class="ac-ro" id="d-deflect">0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">体型</span><span class="ac-ro" id="d-size">+0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">属性</span><span class="ac-ro" id="d-ac-dex">+0</span></span>
+            <span class="ac-op">+</span>
+            <span class="ac-cell"><span class="ac-k">其他</span><span class="ac-ro" id="d-ac-misc">0</span></span>
+          </div>
+          </div>
+          <div class="ac-side">
+            <div class="ac-stat"><span class="k">接触 AC</span><span class="v" id="d-touch-final">10</span></div>
+            <div class="ac-stat"><span class="k">措手不及</span><span class="v" id="d-flat-final">10</span></div>
+          </div>
+          </div>
+        </div>
+
+        <div class="stat-row">
+        <table class="stat-table">
+          <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>基础</th><th>其他</th><th>属性</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="st-label">强韧豁免</td><td class="st-total" id="d-fort-final">+0</td>
+              <td class="st-num" id="d-fort-base">0</td>
+              <td class="st-num" id="d-fort-other">0</td>
+              <td class="st-val" id="d-fort-attr">+0</td>
+            </tr>
+            <tr>
+              <td class="st-label">反射豁免</td><td class="st-total" id="d-ref-final">+0</td>
+              <td class="st-num" id="d-ref-base">0</td>
+              <td class="st-num" id="d-ref-other">0</td>
+              <td class="st-val" id="d-ref-attr">+0</td>
+            </tr>
+            <tr>
+              <td class="st-label">意志豁免</td><td class="st-total" id="d-will-final">+0</td>
+              <td class="st-num" id="d-will-base">0</td>
+              <td class="st-num" id="d-will-other">0</td>
+              <td class="st-val" id="d-will-attr">+0</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table class="stat-table">
+          <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>其他</th><th>BAB</th><th>属性</th><th style="width:130px">关键属性</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="st-label">CMB</td><td class="st-total" id="d-cmb-final">0</td>
+              <td class="st-num" id="d-cmb-other">0</td>
+              <td class="st-val" id="d-cmb-bab">+0</td>
+              <td class="st-val" id="d-cmb-attr">+0</td>
+              <td id="d-cmb-ability">力量</td>
+            </tr>
+            <tr>
+              <td class="st-label">CMD</td><td class="st-total" id="d-cmd-final">10</td>
+              <td class="st-num" id="d-cmd-other">0</td>
+              <td class="st-val" id="d-cmd-bab">+0</td>
+              <td class="st-val" id="d-cmd-attr">+0</td>
+              <td class="st-note">（+10）</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+
+        <div style="margin-top:12px"><label>其他防御特性</label><input type="text" id="d-special-def" readonly></div>
+      </div>
+    </div>
+
+    <!-- 攻击 -->
+    <div class="section" id="sec-attack-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">攻击</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div id="d-attack-list" class="attack-list"></div>
+        <div style="margin-top:10px">
+          <label>特殊攻击</label>
+          <div id="d-special-atk" style="font-size:13px;padding:6px;background:var(--readonly);border-radius:4px;min-height:30px">—</div>
+        </div>
+      </div>
+    </div>
+
+
+
+
+
+    <!-- 能力池 -->
+    <div class="section" id="sec-pool-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">能力池</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div id="d-pool-display" class="pool-grid"></div>
+      </div>
+    </div>
+
+        <!-- 技能 -->
+    <div class="section" id="sec-skill-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">技能</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="skill-pool-bar">
+          <div class="pool"><span id="d-pool-skill">剩余 0 / 总计 0</span></div>
+          <button class="btn btn-sm section-hbtn" id="btnSkillFold" style="margin-left:auto;margin-right:0" onclick="toggleSkillFold()">折叠未受训</button>
+        </div>
+        <div class="skill-cols">
+          <div class="skill-col">
+            <table class="skill-table" id="d-skill-table-a">
+              <thead><tr><th class="fav-col">收藏</th><th style="text-align:left;width:30%">技能</th><th>总值</th><th>临时</th><th class="dice-col">骰子</th></tr></thead>
+              <tbody id="d-skill-tbody-a"></tbody>
+            </table>
+          </div>
+          <div class="skill-col">
+            <table class="skill-table" id="d-skill-table-b">
+              <thead><tr><th class="fav-col">收藏</th><th style="text-align:left;width:30%">技能</th><th>总值</th><th>临时</th><th class="dice-col">骰子</th></tr></thead>
+              <tbody id="d-skill-tbody-b"></tbody>
+            </table>
+            <div class="skill-note">* 表示该技能会受到“防具减值”的影响；（）表示该技能必须受训才能使用</div>
+          </div>
+        </div>
+        <div id="d-skill-warn" class="skill-warn">技能等级超出角色等级！</div>
+      </div>
+    </div>
+
+
+
+    <!-- 法术 -->
+    <div class="section" id="sec-spell-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">法术</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="spell-meta">
+          <div class="sm-row"><span class="sm-k">CL</span><span class="sm-v" id="d-spell-cl">—</span></div>
+          <div class="sm-row"><span class="sm-k">关键属性</span>
+            <span class="sm-v" id="d-spell-ability-name">—</span>
+            <span class="sm-v" id="d-spell-ability-score">—</span></div>
+          <div class="sm-row"><span class="sm-k">失败率</span>
+            <span class="sm-v" id="d-spell-failure">0</span><span class="sm-unit">%</span></div>
+          <div class="sm-row"><span class="sm-k">基础DC</span>
+            <span class="sm-v" id="d-spell-dc">10</span></div>
+        </div>
+        <div id="d-spell-pages"></div>
+      </div>
+    </div>
+
+    <!-- 专长 -->
+    <div class="section" id="sec-feat-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">专长</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <table class="ability-line-table">
+          <thead><tr><th class="col-source">来源</th><th class="col-name">名称</th><th class="col-desc">概述</th></tr></thead>
+          <tbody id="d-feat-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+        <!-- 种族 & 职业 & 背景特性 -->
+    <div class="section" id="sec-features-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">种族&amp;职业&amp;背景特性</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <table class="ability-line-table">
+          <thead><tr><th class="col-source">来源</th><th class="col-name">名称</th><th class="col-desc">概述</th></tr></thead>
+          <tbody id="d-feature-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+        <!-- 装备：护甲 / 盾牌 -->
+    <div class="section" id="sec-armor-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">装备</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="equip-row">
+          <table class="equip-table">
+            <tbody>
+              <tr>
+                <td class="eq-label">护甲</td>
+                <td colspan="5" class="eq-top">
+                  <div class="eq-top-inner">
+                    <span id="d-armor-name" class="eq-name-text">—</span>
+                    <span>类型 <b id="d-armor-type">重甲</b></span>
+                  </div>
+                </td>
+              </tr>
+              <tr class="eq-head"><td>价格</td><td>AC</td><td>最大敏捷</td><td>技能减值</td><td>法术失败</td><td>重量</td></tr>
+              <tr>
+                <td id="d-armor-price">0</td><td id="d-armor-ac">0</td><td id="d-armor-maxdex">0</td>
+                <td id="d-armor-acp">0</td><td><span class="asf-wrap"><span id="d-armor-asf">0</span>%</span></td><td id="d-armor-weight">0</td>
+              </tr>
+              <tr>
+                <td class="eq-label">特性</td>
+                <td colspan="5" id="d-armor-note">—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table class="equip-table">
+            <tbody>
+              <tr>
+                <td class="eq-label">盾牌</td>
+                <td colspan="4" class="eq-top">
+                  <div class="eq-top-inner">
+                    <span id="d-shield-name" class="eq-name-text">—</span>
+                  </div>
+                </td>
+              </tr>
+              <tr class="eq-head"><td>价格</td><td>AC</td><td>技能减值</td><td>法术失败</td><td>重量</td></tr>
+              <tr>
+                <td id="d-shield-price">0</td><td id="d-shield-ac">0</td><td id="d-shield-acp">0</td>
+                <td><span class="asf-wrap"><span id="d-shield-asf">0</span>%</span></td><td id="d-shield-weight">0</td>
+              </tr>
+              <tr>
+                <td class="eq-label">特性</td>
+                <td colspan="4" id="d-shield-note">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 道具 -->
+    <div class="section" id="sec-gear-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">道具</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div style="font-size:13px;margin-bottom:8px">
+          <b>已装备：</b><span id="d-equipped">—</span>
+        </div>
+        <table class="gear-table">
+          <thead><tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">价值(gp)</th><th>备注</th></tr></thead>
+          <tbody id="d-gear-tbody"></tbody>
+        </table>
+        <div class="purse-row">
+          <!-- 钱袋 -->
+          <div class="coin-purse">
+            <div class="box-title">钱袋</div>
+            <table class="coin-table">
+              <tbody>
+                <tr><td class="coin-name">白金币</td><td class="coin-amt"><span id="d-coin-pp">0</span><span class="coin-unit">Pp</span></td><td class="coin-w" id="d-cw-pp">0</td></tr>
+                <tr><td class="coin-name">金币</td><td class="coin-amt"><span id="d-coin-gp">0</span><span class="coin-unit">Gp</span></td><td class="coin-w" id="d-cw-gp">0</td></tr>
+                <tr><td class="coin-name">银币</td><td class="coin-amt"><span id="d-coin-sp">0</span><span class="coin-unit">Sp</span></td><td class="coin-w" id="d-cw-sp">0</td></tr>
+                <tr><td class="coin-name">铜币</td><td class="coin-amt"><span id="d-coin-cp">0</span><span class="coin-unit">Cp</span></td><td class="coin-w" id="d-cw-cp">0</td></tr>
+                <tr class="coin-cash"><td class="coin-name">现金</td><td class="coin-amt"><span id="d-coin-total">0.00</span><span class="coin-unit">G</span></td><td class="coin-w" id="d-cw-total">0</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 卷轴 / 药水 / 魔杖（无重量） -->
+          <div class="scroll-box">
+            <div class="box-title">卷轴/药水/魔杖</div>
+            <table class="scroll-table" id="d-scroll-table">
+              <thead>
+                <tr><th>法术名</th><th class="s-lv">环</th><th class="s-cl">CL</th><th class="s-qty">数量</th></tr>
+              </thead>
+              <tbody id="d-scroll-tbody"></tbody>
+            </table>
+          </div>
+
+          <!-- 负重 -->
+          <div class="load-box">
+            <div class="box-title">负重</div>
+            <table class="load-table">
+              <tbody id="d-load-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 资源记录 -->
+    <div class="section" id="sec-levels-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">资源记录</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="lv-split">
+          <table class="lv-table">
+            <thead><tr><th class="lv-th-lv">LV</th><th class="lv-th-ability">属性提升</th><th>职业</th><th>变体</th><th>专长</th><th>天赋职业奖励</th></tr></thead>
+            <tbody id="d-lv-tbody-a"></tbody>
+          </table>
+          <table class="lv-table">
+            <thead><tr><th class="lv-th-lv">LV</th><th class="lv-th-ability">属性提升</th><th>职业</th><th>变体</th><th>专长</th><th>天赋职业奖励</th></tr></thead>
+            <tbody id="d-lv-tbody-b"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 角色背景（单独一栏，放在最下面） -->
+    <div class="section" id="sec-background-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">角色背景</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div id="d-background" style="font-size:13px;padding:6px;background:var(--readonly);border-radius:4px;min-height:80px;overflow:auto;white-space:pre-wrap">—</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+
+
+<script>
+// ==================== 数据源（可外部覆盖）====================
+
+
+
+
+
+
+// acp: 受防具减值影响（显示 *）
+// trained: 必须受训才能使用（显示括号）
+window.SKILLS = [
+  // 力量
+  {id:"climb", name:"攀爬", ability:"str", acp:true},
+  {id:"swim", name:"游泳", ability:"str", acp:true},
+  // 敏捷
+  {id:"acrobatics", name:"特技", ability:"dex", acp:true},
+  {id:"disable-device", name:"解除装置", ability:"dex", acp:true, trained:true},
+  {id:"escape-artist", name:"逃脱", ability:"dex", acp:true},
+  {id:"fly", name:"飞行", ability:"dex", acp:true},
+  {id:"ride", name:"骑术", ability:"dex", acp:true},
+  {id:"sleight-of-hand", name:"巧手", ability:"dex", acp:true, trained:true},
+  {id:"stealth", name:"隐匿", ability:"dex", acp:true},
+  // 智力
+  {id:"appraise", name:"估价", ability:"int"},
+  {id:"linguistics", name:"语言学", ability:"int", trained:true},
+  {id:"spellcraft", name:"法术辨识", ability:"int", trained:true},
+  {id:"k-arcana", name:"知识(奥秘)", ability:"int", trained:true},
+  {id:"k-dungeons", name:"知识(地城构造)", ability:"int", trained:true},
+  {id:"k-nature", name:"知识(自然)", ability:"int", trained:true},
+  {id:"k-planes", name:"知识(位面)", ability:"int", trained:true},
+  {id:"k-religion", name:"知识(宗教)", ability:"int", trained:true},
+  {id:"k-history", name:"知识(历史)", ability:"int", trained:true},
+  {id:"k-nobility", name:"知识(贵族)", ability:"int", trained:true},
+  {id:"k-local", name:"知识(风土人文)", ability:"int", trained:true},
+  {id:"craft", name:"工艺", ability:"int"},
+  {id:"lore", name:"学识", ability:"int"},
+  // 感知
+  {id:"heal", name:"医疗", ability:"wis"},
+  {id:"perception", name:"察觉", ability:"wis"},
+  {id:"sense-motive", name:"察言观色", ability:"wis"},
+  {id:"survival", name:"生存", ability:"wis"},
+  {id:"profession", name:"专业", ability:"wis", trained:true},
+  // 魅力
+  {id:"bluff", name:"唬骗", ability:"cha"},
+  {id:"diplomacy", name:"交涉", ability:"cha"},
+  {id:"disguise", name:"易容", ability:"cha"},
+  {id:"handle-animal", name:"驯养动物", ability:"cha", trained:true},
+  {id:"intimidate", name:"威吓", ability:"cha"},
+  {id:"use-magic-device", name:"使用魔法装置", ability:"cha", trained:true},
+  {id:"art", name:"艺术", ability:"cha"},
+  {id:"perform", name:"表演", ability:"cha"}
+];
+
+
+
+// ==================== 计算函数 ====================
+function abilityMod(score){ return Math.floor((score-10)/2); }
+// 体型 AC/攻击/CMD 修正（超微 +8 … 超巨 -8）
+const SIZE_AC_MOD = {'超微型':8,'微型':4,'超小型':2,'小型':1,'中型':0,'大型':-1,'超大型':-2,'巨型':-4,'超巨型':-8};
+function sizeAcMod(){
+  const v = document.getElementById('load-size')?.value || '中型（二足）';
+  const name = String(v).split('（')[0];
+  return (name in SIZE_AC_MOD) ? SIZE_AC_MOD[name] : 0;
+}
+function sizeLabel(){
+  const v = document.getElementById('load-size')?.value || '中型（二足）';
+  return String(v).split('（')[0];
+}
+function getClassEntries(){
+  const rows = document.querySelectorAll('#class-rows .class-row');
+  const entries = [];
+  rows.forEach(row=>{
+    const name = (row.querySelector('.cls-name')?.value || '').trim();
+    const variant = (row.querySelector('.cls-variant')?.value || '').trim();
+    const lvl = parseInt(row.querySelector('.cls-level')?.value)||0;
+    if(lvl>0 || name) entries.push({name, variant, level:lvl});
+  });
+  return entries;
+}
+// 规则不再由职业/种族数据表推导：BAB、豁免基础、生命基础 全部手填
+function calcBAB(){ return parseInt(document.getElementById('b-bab')?.value)||0; }
+function calcSave(type){ return parseInt(document.getElementById('b-'+type+'-base')?.value)||0; }
+function calcHP(){ return parseInt(document.getElementById('b-hp-max')?.value)||0; }
+function getAbilityMods(){
+  const mods = {};
+  ['str','dex','con','int','wis','cha'].forEach(ab=>{
+    mods[ab] = abilityMod(parseInt(document.getElementById('ab-'+ab).value)||10);
+  });
+  return mods;
+}
+
+// ==================== 渲染引擎 ====================
+function render(){
+  const entries = getClassEntries();
+  const sizeAc = sizeAcMod();
+  const mods = getAbilityMods();
+  const bab = calcBAB();
+
+  // 属性调整值（+N 形式）
+  ['str','dex','con','int','wis','cha'].forEach(ab=>{
+    document.getElementById('mod-'+ab).textContent = (mods[ab]>=0?'+':'')+mods[ab];
+  });
+
+  // 先攻（属性 + 专长 + 其他）
+  const initFeat = parseInt(document.getElementById('b-init-feat').value)||0;
+  const initMisc = parseInt(document.getElementById('b-init-misc').value)||0;
+  const initTotal = mods.dex + initFeat + initMisc;
+  document.getElementById('b-init-attr').textContent = (mods.dex>=0?'+':'')+mods.dex;
+  document.getElementById('b-init-final').textContent = (initTotal>=0?'+':'')+initTotal;
+
+  // HP：单值，不做计算
+
+  // AC 公式：10（不显示）+ 护甲 + 盾牌 + 天生防御 + 闪避 + 偏斜 + 体型 + 属性 + 其他
+  // 护甲 / 盾牌 直接引用「装备」栏的 AC（不可手填）
+  const armor = Math.abs(parseInt(document.getElementById('b-armor-ac').value)||0);
+  const shield = Math.abs(parseInt(document.getElementById('b-shield-ac').value)||0);
+  document.getElementById('b-armor').textContent = armor;
+  document.getElementById('b-shield').textContent = shield;
+  const nat = parseInt(document.getElementById('b-nat').value)||0;
+  const dodge = parseInt(document.getElementById('b-dodge').value)||0;
+  const deflect = parseInt(document.getElementById('b-deflect').value)||0;
+  const acMisc = parseInt(document.getElementById('b-ac-misc').value)||0;
+
+  // 护甲「最大敏捷」：限制 AC 的敏捷加值；留空 = 不限制
+  const maxDexRaw = (document.getElementById('b-armor-maxdex')?.value || '').trim();
+  const maxDex = maxDexRaw === '' ? null : (parseInt(maxDexRaw) || 0);
+  const dexForAc = maxDex === null ? mods.dex : Math.min(mods.dex, maxDex);
+
+  const acTotal = 10 + armor + shield + nat + dodge + deflect + sizeAc + dexForAc + acMisc;
+  const touchTotal = 10 + dodge + deflect + sizeAc + dexForAc + acMisc;
+  const flatTotal = 10 + armor + shield + nat + deflect + sizeAc + acMisc;
+
+  document.getElementById('b-size-final').textContent = (sizeAc>=0?'+':'')+sizeAc;
+  const bDexEl = document.getElementById('b-dex-final');
+  bDexEl.textContent = (dexForAc>=0?'+':'')+dexForAc;
+  bDexEl.title = maxDex !== null && dexForAc !== mods.dex ? `受护甲最大敏捷限制（最大 +${maxDex}）` : '';
+  document.getElementById('b-ac-final').textContent = acTotal;
+  document.getElementById('b-touch-final').textContent = touchTotal;
+  document.getElementById('b-flat-final').textContent = flatTotal;
+
+  // 速度 / 奔跑速度：重甲 3 倍，非重甲 4 倍
+  const speedVal = parseInt(document.getElementById('b-speed')?.value) || 0;
+  const armorTypeVal = document.getElementById('b-armor-type')?.value || '';
+  const runSpeedVal = speedVal * (armorTypeVal.includes('重甲') ? 3 : 4);
+  if(document.getElementById('b-run-speed')) document.getElementById('b-run-speed').textContent = speedVal ? runSpeedVal + ' 尺' : '—';
+
+  // 施法信息：CL / 法术类型 / 关键属性 / 失败率 / 基础DC
+  const spellAbilityEl = document.getElementById('b-spell-ability');
+  const spellAbility = spellAbilityEl ? spellAbilityEl.value : 'int';
+  const spellScore = parseInt(document.getElementById('ab-'+spellAbility)?.value)||10;
+  const spellMod = abilityMod(spellScore);
+  const asfArmor = Math.abs(parseFloat(document.getElementById('b-armor-asf')?.value)||0);
+  const asfShield = Math.abs(parseFloat(document.getElementById('b-shield-asf')?.value)||0);
+  const spellFailure = asfArmor + asfShield;
+  const spellDC = 10 + spellMod;
+  const setSpellTxt = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  setSpellTxt('b-spell-ability-score', spellScore);
+  setSpellTxt('b-spell-failure', spellFailure);
+  setSpellTxt('b-spell-dc', spellDC);
+
+  // 豁免：基础 + 其他 + 属性（强韧=体质、反射=敏捷、意志=感知）
+  const fortBase = calcSave('fort');
+  const refBase = calcSave('ref');
+  const willBase = calcSave('will');
+  const fortOther = parseInt(document.getElementById('b-fort-other').value)||0;
+  const refOther = parseInt(document.getElementById('b-ref-other').value)||0;
+  const willOther = parseInt(document.getElementById('b-will-other').value)||0;
+
+  const fortTotal = fortBase + fortOther + mods.con;
+  const refTotal = refBase + refOther + mods.dex;
+  const willTotal = willBase + willOther + mods.wis;
+
+  document.getElementById('b-fort-attr').textContent = (mods.con>=0?'+':'')+mods.con;
+  document.getElementById('b-ref-attr').textContent = (mods.dex>=0?'+':'')+mods.dex;
+  document.getElementById('b-will-attr').textContent = (mods.wis>=0?'+':'')+mods.wis;
+  document.getElementById('b-fort-final').textContent = (fortTotal>=0?'+':'')+fortTotal;
+  document.getElementById('b-ref-final').textContent = (refTotal>=0?'+':'')+refTotal;
+  document.getElementById('b-will-final').textContent = (willTotal>=0?'+':'')+willTotal;
+
+  // CMB / CMD
+  const cmbOther = parseInt(document.getElementById('b-cmb-other').value)||0;
+  const cmbAbility = document.getElementById('b-cmb-ability').value;
+  const cmbAttr = mods[cmbAbility]||0;
+  const cmbTotal = bab + cmbAttr + cmbOther;
+  const cmdOther = parseInt(document.getElementById('b-cmd-other').value)||0;
+  const cmdAttr = mods.str + mods.dex;
+  const cmdTotal = 10 + bab + cmdAttr + cmdOther;
+
+  document.getElementById('b-cmb-bab').textContent = (bab>=0?'+':'')+bab;
+  document.getElementById('b-cmb-attr').textContent = (cmbAttr>=0?'+':'')+cmbAttr;
+  document.getElementById('b-cmb-final').textContent = cmbTotal;
+  document.getElementById('b-cmd-bab').textContent = (bab>=0?'+':'')+bab;
+  document.getElementById('b-cmd-attr').textContent = (cmdAttr>=0?'+':'')+cmdAttr;
+  document.getElementById('b-cmd-final').textContent = cmdTotal;
+
+  // 攻击条
+  renderAttackRows(bab, mods);
+
+  // 技能点：总计手填，剩余 = 总计 - 已投入
+  let spent = 0;
+  window.SKILLS.forEach(sk=>{ spent += parseInt(document.getElementById('skill-'+sk.id)?.value)||0; });
+  const pointTotal = parseInt(document.getElementById('b-skill-total')?.value)||0;
+  const poolEl = document.getElementById('pool-skill');
+  if(poolEl) poolEl.textContent = `剩余 ${pointTotal-spent} / 总计 `;
+
+  // 技能表
+  renderSkills(entries, mods);
+
+  // 法术
+  renderSpellPages();
+
+  // 装备
+  updateGearStats();
+
+  // 同步展示
+  updateDisplay();
+}
+
+// 攻击模式：每条攻击单独勾选（双武器已移除）
+const ATTACK_MODES = [
+  {value:'pa', label:'猛力攻击'},
+  {value:'ce', label:'寓守于攻'},
+  {value:'da', label:'致命射击'},
+  {value:'rs', label:'快速射击'}
+];
+function abilityOptions(selected){
+  return ABILITY_ORDER.map(k=>`<option value="${k}" ${k===selected?'selected':''}>${ABILITY_LABEL[k]}</option>`).join('');
+}
+function attackModeMenu(selected){
+  return ATTACK_MODES.map(m=>`<label><input type="checkbox" class="atk-mode" value="${m.value}" ${selected&&selected.indexOf(m.value)>=0?'checked':''} onchange="render()">${m.label}</label>`).join('');
+}
+
+function renderAttackRows(bab, mods){
+  const list = document.getElementById('attack-list');
+  if(!list) return;
+  if(!list.children.length) list.insertAdjacentHTML('beforeend', createAttackRowHTML(0));
+  Array.from(list.querySelectorAll('.attack-card')).forEach(card=>{
+    const abAb = card.querySelector('.atk-ab-ability').value;
+    const abMod = mods[abAb] || 0;
+    const abMisc1 = parseInt(card.querySelector('.atk-ab-m1').value)||0;
+    const abMisc2 = parseInt(card.querySelector('.atk-ab-m2').value)||0;
+    const dmgAb = card.querySelector('.atk-dmg-ability').value;
+    const dmgMod = dmgAb==='special' ? 0 : (mods[dmgAb] || 0);
+    // AB 合计 = BAB + 属性调整 + 调整1 + 调整2（只读，不可改）
+    const abTotal = bab + abMod + abMisc1 + abMisc2;
+    card.querySelector('.atk-bab').textContent = (bab>=0?'+':'')+bab;
+    card.querySelector('.atk-ab-mod').textContent = (abMod>=0?'+':'')+abMod;
+    card.querySelector('.atk-ab-total').textContent = (abTotal>=0?'+':'')+abTotal;
+    card.querySelector('.atk-dmg-mod').textContent = dmgAb==='special' ? '—' : ((dmgMod>=0?'+':'')+dmgMod);
+  });
+}
+
+function createAttackRowHTML(idx, modes){
+  return `<div class="attack-card" data-index="${idx}">
+    <div class="atk-head">
+      <select class="atk-type" onchange="render()"><option>近战</option><option>远程</option></select>
+      <input type="text" class="atk-weapon" placeholder="武器名" onchange="render()">
+      <input type="text" class="atk-weapon-type" placeholder="武器类型" onchange="render()">
+      <input type="text" class="atk-range" placeholder="射程" onchange="render()">
+      <input type="text" class="atk-damage-type" placeholder="伤害类型" onchange="render()">
+      <details class="mode-dd">
+        <summary>攻击模式</summary>
+        <div class="mode-menu">${attackModeMenu(modes)}</div>
+      </details>
+      <button class="btn btn-del btn-sm" style="margin-left:auto" onclick="this.closest('.attack-card').remove();render()" title="删除这条攻击">×</button>
+    </div>
+    <div class="atk-row">
+      <div class="fld"><span class="fld-l">攻击</span><select class="atk-ab-ability" onchange="render()">${abilityOptions('str')}</select></div>
+      <div class="fld"><span class="fld-l">BAB</span><span class="atk-val atk-bab">+0</span></div>
+      <div class="fld"><span class="fld-l">属性</span><span class="atk-val atk-ab-mod">+0</span></div>
+      <div class="fld"><span class="fld-l">其他1</span><input type="number" class="atk-ab-m1" value="" onchange="render()"></div>
+      <div class="fld"><span class="fld-l">其他2</span><input type="number" class="atk-ab-m2" value="" onchange="render()"></div>
+      <div class="fld"><span class="fld-l">合计</span><span class="atk-val atk-ab-total">+0</span></div>
+    </div>
+    <div class="atk-row">
+      <div class="fld"><span class="fld-l">伤害</span><select class="atk-dmg-ability" onchange="render()">${abilityOptions('str')}<option value="special">特殊</option></select></div>
+      <div class="fld"><span class="fld-l">伤害骰</span><input type="text" class="atk-damage" placeholder="1d6" onchange="render()"></div>
+      <div class="fld"><span class="fld-l">属性</span><span class="atk-val atk-dmg-mod">+0</span></div>
+      <div class="fld"><span class="fld-l">其他1</span><input type="number" class="atk-dmg-m1" value="" onchange="render()"></div>
+      <div class="fld"><span class="fld-l">其他2</span><input type="number" class="atk-dmg-m2" value="" onchange="render()"></div>
+    </div>
+  </div>`;
+}
+
+function addAttackRow(){
+  const list = document.getElementById('attack-list');
+  list.insertAdjacentHTML('beforeend', createAttackRowHTML(list.children.length));
+  render();
+}
+
+// 技能：属性下拉可改（默认该技能原本的属性），本职手勾，等级手填
+const ABILITY_ORDER = ['str','dex','con','int','wis','cha'];
+const ABILITY_LABEL = {str:'力量',dex:'敏捷',con:'体质',int:'智力',wis:'感知',cha:'魅力'};
+
+function skillAbility(skillId, fallback){
+  const sel = document.getElementById('skill-ab-'+skillId);
+  return sel ? sel.value : fallback;
+}
+function skillIsClass(skillId){
+  const cb = document.getElementById('skill-cs-'+skillId);
+  return !!(cb && cb.checked);
+}
+// 技能显示名：受防具减值加 *，必须受训加括号
+function skillLabel(sk){
+  let n = sk.name;
+  if(sk.trained) n = '（' + n + '）';
+  if(sk.acp) n += '*';
+  return n;
+}
+// 一键折叠"必须受训但等级为 0"的技能
+let skillFoldUntrained = false;
+function toggleSkillFold(){
+  skillFoldUntrained = !skillFoldUntrained;
+  const btn = document.getElementById('btnSkillFold');
+  if(btn) btn.textContent = skillFoldUntrained ? '展开全部技能' : '折叠未受训';
+  render();
+}
+
+// 任一技能等级 > 角色总等级 时提示
+function updateSkillWarning(){
+  const totalLevel = getClassEntries().reduce((s,e)=>s+e.level,0);
+  let over = false;
+  if(totalLevel > 0){
+    window.SKILLS.forEach(sk=>{
+      const ranks = parseInt(document.getElementById('skill-'+sk.id)?.value)||0;
+      if(ranks > totalLevel) over = true;
+    });
+  }
+  ['skill-warn','d-skill-warn'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.display = over ? 'block' : 'none';
+  });
+}
+
+// 护甲 + 盾牌的技能减值合计（内部都按正数处理）
+function armorCheckPenalty(){
+  const a = Math.abs(parseInt(document.getElementById('b-armor-acp')?.value)||0);
+  const s = Math.abs(parseInt(document.getElementById('b-shield-acp')?.value)||0);
+  return a + s;
+}
+
+function renderSkills(entries, mods){
+  const tbodyA = document.getElementById('skill-tbody-a');
+  const tbodyB = document.getElementById('skill-tbody-b');
+  if(!tbodyA || !tbodyB) return;
+
+  if(!tbodyA.children.length && !tbodyB.children.length){
+    const sorted = [...window.SKILLS].sort((a,b)=>{
+      const ia = ABILITY_ORDER.indexOf(a.ability), ib = ABILITY_ORDER.indexOf(b.ability);
+      return (ia-ib) || String(a.name).localeCompare(String(b.name),'zh');
+    });
+    const half = Math.ceil(sorted.length / 2);
+    sorted.forEach((sk, idx)=>{
+      const tr = document.createElement('tr');
+      const opts = ABILITY_ORDER.map(k=>`<option value="${k}" ${k===sk.ability?'selected':''}>${ABILITY_LABEL[k]}</option>`).join('');
+      tr.innerHTML = `<td class="skill-name">${skillLabel(sk)}</td>
+        <td><select id="skill-ab-${sk.id}" onchange="render()" style="font-size:11px;padding:1px">${opts}</select></td>
+        <td><input type="checkbox" id="skill-cs-${sk.id}" onchange="render()" title="本职技能"></td>
+        <td><input type="number" id="skill-${sk.id}" value="0" min="0" style="width:40px" onchange="render()"></td>
+        <td><input type="number" id="skill-misc-${sk.id}" value="0" style="width:40px" onchange="render()"></td>
+        <td id="skill-total-${sk.id}">+0</td>`;
+      (idx < half ? tbodyA : tbodyB).appendChild(tr);
+    });
+  }
+
+  // 导入回填：等级 / 调整 / 属性 / 本职
+  if(window.__pendingSkills){
+    const p = window.__pendingSkills; window.__pendingSkills = null;
+    Object.entries(p).forEach(([id,v])=>{
+      const r = document.getElementById('skill-'+id); if(r) r.value = v.ranks||0;
+      const m = document.getElementById('skill-misc-'+id); if(m) m.value = v.misc||0;
+      const a = document.getElementById('skill-ab-'+id); if(a && v.ability) a.value = v.ability;
+      const c = document.getElementById('skill-cs-'+id); if(c) c.checked = !!v.classSkill;
+    });
+  }
+
+  const acpPen = armorCheckPenalty();
+  window.SKILLS.forEach(sk=>{
+    const ability = skillAbility(sk.id, sk.ability);
+    const ranks = parseInt(document.getElementById('skill-'+sk.id)?.value)||0;
+    const misc = parseInt(document.getElementById('skill-misc-'+sk.id)?.value)||0;
+    const cs = skillIsClass(sk.id);
+    const csBonus = (cs && ranks > 0) ? 3 : 0;
+    const penalty = sk.acp ? acpPen : 0;   // 带 * 的技能自动减去技能减值
+    const total = ranks + (mods[ability]||0) + csBonus + misc - penalty;
+    const row = document.getElementById('skill-'+sk.id)?.closest('tr');
+    row?.querySelector('.skill-name')?.classList.toggle('class-skill', cs);
+    const el = document.getElementById('skill-total-'+sk.id);
+    if(el) el.textContent = (total>=0?'+':'')+total;
+  });
+  updateSkillWarning();
+}
+
+// ==================== 法术页（可增删） ====================
+// 每页结构：{ perDay:{0..9}, known:'', chips:{level:[{v,off}]} }
+let spellPages = [{ perDay:{}, known:'', chips:{} }];
+
+function pageChips(page, level, count){
+  const p = spellPages[page];
+  if(!p) return [];
+  if(!p.chips[level]) p.chips[level] = [];
+  const arr = p.chips[level];
+  while(arr.length < count) arr.push({v:'', off:false});
+  arr.length = count;
+  return arr;
+}
+
+function setSpellPerDay(page, level, val){
+  const p = spellPages[page];
+  if(!p) return;
+  p.perDay[level] = parseInt(val)||0;
+  renderSpellPages();
+}
+
+function setSpellChip(page, level, idx, val){
+  const arr = pageChips(page, level, idx+1);
+  arr[idx].v = val;
+}
+
+function toggleSpellChip(page, level, idx, el){
+  const arr = pageChips(page, level, idx+1);
+  arr[idx].off = !arr[idx].off;
+  el.classList.toggle('off', arr[idx].off);
+}
+
+function setSpellKnown(page, val){
+  if(spellPages[page]) spellPages[page].known = val;
+}
+
+function spellPageHTML(page){
+  const p = spellPages[page];
+  let rows = '';
+  for(let lv=0; lv<=9; lv++){
+    const per = parseInt(p.perDay[lv])||0;
+    const chips = pageChips(page, lv, per);
+    let badge = '';
+    for(let k=0; k<per; k++){
+      const v = chips[k].v || '';
+      const w = Math.max(52, 26 + v.length*16);
+      badge += `<input class="slot-chip slot-chip-edit" style="width:${w}px" value="${v}" oninput="autoGrowChip(this)" onchange="setSpellChip(${page},${lv},${k},this.value)">`;
+    }
+    rows += `<div class="spell-slot-row">
+      <span class="slot-level">${lv===0?'0环':lv+'环'}</span>
+      <span>每日:</span>
+      <input type="number" class="slot-perday" data-page="${page}" data-level="${lv}" value="${p.perDay[lv] ?? ''}" min="0" onchange="setSpellPerDay(${page},${lv},this.value)">
+      <span class="slot-badges">${badge}</span>
+    </div>`;
+  }
+  const del = page > 0
+    ? `<button class="btn btn-del btn-sm" style="margin-left:auto" onclick="removeSpellPage(${page})">删除当前法术页</button>`
+    : '';
+  return `<div class="spell-page">
+    <div class="spell-page-head"><span class="spell-page-title">法术页 ${page+1}</span>${del}</div>
+    <div class="spell-slots">${rows}</div>
+    <div style="margin-top:8px">
+      <label>已知 / 准备法术记录</label>
+      <textarea class="spell-known" style="min-height:60px" placeholder="按环位记录" onchange="setSpellKnown(${page}, this.value)">${p.known||''}</textarea>
+    </div>
+  </div>`;
+}
+
+function renderSpellPages(){
+  const container = document.getElementById('spell-pages');
+  if(container){
+    container.innerHTML = spellPages.map((_, i)=>spellPageHTML(i)).join('');
+  }
+  // 兼容旧的派生字段：取第一页
+  const totals = {};
+  for(let i=0;i<=9;i++) totals[i] = parseInt(spellPages[0]?.perDay?.[i])||0;
+  window.__spellSlotTotals = totals;
+}
+
+function addSpellPage(){
+  // 新增空白法术页（不复制第一页已填内容，只使用原始模板）
+  spellPages.push({ perDay:{}, known:'', chips:{} });
+  renderSpellPages();
+  toast('已增加法术页');
+}
+
+function removeSpellPage(idx){
+  if(idx <= 0) return;               // 第一页不可删
+  spellPages.splice(idx, 1);
+  renderSpellPages();
+}
+
+// 编辑页徽章随内容加长
+function autoGrowChip(el){
+  el.style.width = Math.max(52, 26 + (el.value||'').length * 16) + 'px';
+}
+
+// ==================== 展示界面更新 ====================
+function updateDisplay(){
+  const entries = getClassEntries();
+  const sizeAc = sizeAcMod();
+  const mods = getAbilityMods();
+  const bab = calcBAB();
+
+  // 基础信息（展示页为纯文本，无输入框底色）
+  document.getElementById('d-name').textContent = document.getElementById('b-name').value || '—';
+  document.getElementById('d-player').textContent = document.getElementById('b-player').value || '—';
+  document.getElementById('d-class').textContent = entries.map(e=>`${e.name}${e.variant?`（${e.variant}）`:''} ${e.level}`).join(' / ') || '—';
+  document.getElementById('d-race').textContent = document.getElementById('b-race').value || '—';
+  document.getElementById('d-align').textContent = document.getElementById('b-align').value || '—';
+
+  ['str','dex','con','int','wis','cha'].forEach(ab=>{
+    const val = parseInt(document.getElementById('ab-'+ab).value)||10;
+    document.getElementById('d-'+ab).textContent = val;
+    document.getElementById('d-mod-'+ab).textContent = (mods[ab]>=0?'+':'')+mods[ab];
+  });
+
+  // 视觉 / 先攻表
+  document.getElementById('d-vision').textContent = document.getElementById('b-vision-base').value || '—';
+  ['feat','misc'].forEach(k=>{
+    document.getElementById('d-init-'+k).textContent = document.getElementById('b-init-'+k).value;
+  });
+  document.getElementById('d-init-attr').textContent = document.getElementById('b-init-attr').textContent;
+  document.getElementById('d-init-final').textContent = document.getElementById('b-init-final').textContent;
+
+  // BAB 与角色等级（展示页，字体格式与其它检定一致）
+  const babVal = parseInt(document.getElementById('b-bab').value)||0;
+  document.getElementById('d-bab').textContent = (babVal>=0?'+':'')+babVal;
+  if(document.getElementById('d-level')) document.getElementById('d-level').textContent = entries.reduce((s,e)=>s+e.level,0);
+
+  // 背景
+  document.getElementById('d-background').textContent = document.getElementById('b-background').value || '—';
+
+  // HP（只显示最大生命；当前/临时/非致命都在枭熊端记录）
+  const hpMax = calcHP();
+  document.getElementById('d-hp-max').textContent = hpMax;
+  const hpCurEl = document.getElementById('d-hp-cur'); if(hpCurEl) hpCurEl.textContent = hpMax;
+  const hpTempEl = document.getElementById('d-hp-temp'); if(hpTempEl) hpTempEl.textContent = 0;
+
+  // AC 公式（只读展示）：护甲 / 盾牌 引用装备栏
+  const armor = Math.abs(parseInt(document.getElementById('b-armor-ac').value)||0);
+  const shield = Math.abs(parseInt(document.getElementById('b-shield-ac').value)||0);
+  const nat = parseInt(document.getElementById('b-nat').value)||0;
+  const dodge = parseInt(document.getElementById('b-dodge').value)||0;
+  const deflect = parseInt(document.getElementById('b-deflect').value)||0;
+  const acMisc = parseInt(document.getElementById('b-ac-misc').value)||0;
+
+  document.getElementById('d-armor').textContent = armor;
+  document.getElementById('d-shield').textContent = shield;
+  document.getElementById('d-nat').textContent = nat;
+  document.getElementById('d-dodge').textContent = dodge;
+  document.getElementById('d-deflect').textContent = deflect;
+  document.getElementById('d-size').textContent = (sizeAc>=0?'+':'')+sizeAc;
+  const maxDexRawD = (document.getElementById('b-armor-maxdex')?.value || '').trim();
+  const maxDexD = maxDexRawD === '' ? null : (parseInt(maxDexRawD) || 0);
+  const dexForAcD = maxDexD === null ? mods.dex : Math.min(mods.dex, maxDexD);
+  const dDexEl = document.getElementById('d-ac-dex');
+  dDexEl.textContent = (dexForAcD>=0?'+':'')+dexForAcD;
+  dDexEl.title = maxDexD !== null && dexForAcD !== mods.dex ? `受护甲最大敏捷限制（最大 +${maxDexD}）` : '';
+  document.getElementById('d-ac-misc').textContent = acMisc;
+
+  document.getElementById('d-ac-final').textContent = 10 + armor + shield + nat + dodge + deflect + sizeAc + dexForAcD + acMisc;
+  document.getElementById('d-touch-final').textContent = 10 + dodge + deflect + sizeAc + dexForAcD + acMisc;
+  document.getElementById('d-flat-final').textContent = 10 + armor + shield + nat + deflect + sizeAc + acMisc;
+
+  const dSpeed = parseInt(document.getElementById('b-speed')?.value) || 0;
+  const dArmorType = document.getElementById('b-armor-type')?.value || '';
+  const dRun = dSpeed * (dArmorType.includes('重甲') ? 3 : 4);
+  if(document.getElementById('d-speed')) document.getElementById('d-speed').textContent = dSpeed ? dSpeed + ' 尺' : '—';
+  if(document.getElementById('d-run-speed')) document.getElementById('d-run-speed').textContent = dSpeed ? dRun + ' 尺' : '—';
+
+  // 施法信息（展示页）
+  const sAbilityEl = document.getElementById('b-spell-ability');
+  const sAbility = sAbilityEl ? sAbilityEl.value : 'int';
+  const sScore = parseInt(document.getElementById('ab-'+sAbility)?.value)||10;
+  const sMod = abilityMod(sScore);
+  const sAsfArmor = Math.abs(parseFloat(document.getElementById('b-armor-asf')?.value)||0);
+  const sAsfShield = Math.abs(parseFloat(document.getElementById('b-shield-asf')?.value)||0);
+  const setD = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+  setD('d-spell-cl', document.getElementById('b-spell-cl')?.value || '—');
+  setD('d-spell-ability-name', ABILITY_LABEL[sAbility] || '—');
+  setD('d-spell-ability-score', sScore);
+  setD('d-spell-failure', sAsfArmor + sAsfShield);
+  setD('d-spell-dc', 10 + sMod);
+
+  // 豁免（只读表格）
+  ['fort','ref','will'].forEach(k=>{
+    const base = document.getElementById('b-'+k+'-base').value;
+    const other = document.getElementById('b-'+k+'-other').value;
+    document.getElementById('d-'+k+'-base').textContent = base;
+    document.getElementById('d-'+k+'-other').textContent = other;
+    document.getElementById('d-'+k+'-final').textContent = document.getElementById('b-'+k+'-final').textContent;
+    document.getElementById('d-'+k+'-attr').textContent = document.getElementById('b-'+k+'-attr').textContent;
+  });
+
+  // CMB / CMD（只读表格）
+  document.getElementById('d-cmb-other').textContent = document.getElementById('b-cmb-other').value;
+  document.getElementById('d-cmb-bab').textContent = document.getElementById('b-cmb-bab').textContent;
+  document.getElementById('d-cmb-attr').textContent = document.getElementById('b-cmb-attr').textContent;
+  document.getElementById('d-cmb-final').textContent = document.getElementById('b-cmb-final').textContent;
+  document.getElementById('d-cmb-ability').textContent = ABILITY_LABEL[document.getElementById('b-cmb-ability').value] || '力量';
+
+  document.getElementById('d-cmd-other').textContent = document.getElementById('b-cmd-other').value;
+  document.getElementById('d-cmd-bab').textContent = document.getElementById('b-cmd-bab').textContent;
+  document.getElementById('d-cmd-attr').textContent = document.getElementById('b-cmd-attr').textContent;
+  document.getElementById('d-cmd-final').textContent = document.getElementById('b-cmd-final').textContent;
+
+  document.getElementById('d-special-def').value = document.getElementById('b-special-def').value;
+
+  // 攻击
+  renderDisplayAttacks(bab, mods);
+  document.getElementById('d-special-atk').textContent = document.getElementById('b-special-atk').value || '—';
+
+  // 特性
+  renderDisplayFeats();
+  renderDisplayFeatures();
+
+  // 技能
+  renderDisplaySkills(mods, entries);
+
+  // 法术
+  renderDisplaySpells(entries, mods);
+
+  // 装备
+  // 装备（护甲 / 盾牌）
+  document.getElementById('d-armor-name').textContent = document.getElementById('b-armor-name').value || '—';
+  document.getElementById('d-armor-type').textContent = document.getElementById('b-armor-type').value;
+  ['price','ac','maxdex','acp','asf','weight'].forEach(k=>{
+    document.getElementById('d-armor-'+k).textContent = document.getElementById('b-armor-'+k).value || 0;
+  });
+  document.getElementById('d-armor-note').textContent = document.getElementById('b-armor-note').value || '—';
+  ['price','ac','acp','asf','weight'].forEach(k=>{
+    document.getElementById('d-shield-'+k).textContent = document.getElementById('b-shield-'+k).value || 0;
+  });
+  document.getElementById('d-shield-note').textContent = document.getElementById('b-shield-note').value || '—';
+  document.getElementById('d-shield-name').textContent = document.getElementById('b-shield-name').value || '—';
+
+  renderDisplayGear();
+  renderDisplayScrolls();
+  renderDisplayLevels();
+  updateCoinPurse();
+}
+
+function attackModesOf(card){
+  return Array.from(card.querySelectorAll('.atk-mode:checked')).map(c=>c.value);
+}
+
+// 展示页改模式 → 写回编辑页对应的复选框，两页保持一致
+function setAttackMode(idx, mode, on){
+  const card = document.querySelectorAll('#attack-list .attack-card')[idx];
+  if(!card) return;
+  const cb = Array.from(card.querySelectorAll('.atk-mode')).find(c=>c.value===mode);
+  if(cb) cb.checked = !!on;
+  window.__openModeIdx = idx;   // 重绘后保持这条的下拉展开
+  updateDisplay();
+}
+
+function renderDisplayAttacks(bab, mods){
+  const host = document.getElementById('d-attack-list');
+  const bList = document.getElementById('attack-list');
+  if(!host || !bList) return;
+  const cards = Array.from(bList.querySelectorAll('.attack-card'));
+
+  if(!cards.length){
+    host.innerHTML = '<div style="color:var(--text2)">未添加攻击</div>';
+    return;
+  }
+
+  const openIdx = window.__openModeIdx;
+  window.__openModeIdx = null;
+
+  host.innerHTML = cards.map((card, idx)=>{
+    const type = card.querySelector('.atk-type').value;
+    const weapon = card.querySelector('.atk-weapon').value || '—';
+    const wtype = card.querySelector('.atk-weapon-type').value || '';
+    const range = card.querySelector('.atk-range').value || '—';
+    const dmgType = card.querySelector('.atk-damage-type').value || '';
+    const modes = attackModesOf(card);
+    const abBase = parseInt(String(card.querySelector('.atk-ab-total').textContent).replace('+',''))||0;
+    const damage = card.querySelector('.atk-damage').value || '—';
+    const dmgAbility = card.querySelector('.atk-dmg-ability').value;
+    const dmgMod = dmgAbility==='special' ? 0 : (mods[dmgAbility]||0);
+    const penalty = Math.floor(bab/4)+1;
+
+    let abTotal = abBase;
+    let dmgTotal = dmgMod;
+    if(type==='近战' && modes.indexOf('pa')>=0){ abTotal -= penalty; dmgTotal += penalty*2; }
+    if(type==='远程' && modes.indexOf('da')>=0){ abTotal -= penalty; dmgTotal += penalty*2; }
+    if(type==='近战' && modes.indexOf('ce')>=0){ abTotal -= penalty; }
+    if(type==='远程' && modes.indexOf('rs')>=0){ abTotal -= 2; }
+
+    const dmgText = dmgTotal !== 0 ? `${damage}${dmgTotal>0?'+':''}${dmgTotal}` : damage;
+    const modeBox = ATTACK_MODES.map(m=>`<label><input type="checkbox" class="d-atk-mode" value="${m.value}" ${modes.indexOf(m.value)>=0?'checked':''} onchange="setAttackMode(${idx},'${m.value}',this.checked)">${m.label}</label>`).join('');
+    const modeNames = modes.map(v=>{ const m=ATTACK_MODES.find(x=>x.value===v); return m?m.label:v; }).join('、');
+
+    return `<div class="attack-card">
+      <div class="atk-head">
+        <span class="atk-val">${type}</span>
+        <b>${weapon}</b>
+        ${wtype ? `<span style="color:var(--text2)">${wtype}</span>` : ''}
+        <span style="color:var(--text2)">${range}</span>
+        ${dmgType ? `<span style="color:var(--text2)">${dmgType}</span>` : ''}
+        <details class="mode-dd" ${openIdx===idx?'open':''}>
+          <summary>攻击模式</summary>
+          <div class="mode-menu">${modeBox}</div>
+        </details>
+      </div>
+      <div class="atk-out">
+        <span>命中 <b>${abTotal>=0?'+':''}${abTotal}</b></span>
+        <span class="dice-btn" onclick="copyExpr('1d20${abTotal>=0?'+':''}${abTotal}')" title="复制命中表达式">🎲</span>
+        <span>伤害 <b>${dmgText}</b></span>
+        <span class="dice-btn" onclick="copyExpr('${dmgText}')" title="复制伤害表达式">🎲</span>
+        <span style="color:var(--text2)">伤害 ${ABILITY_LABEL[dmgAbility]||'特殊'}</span>
+        ${modeNames ? `<span class="atk-mode-tag">${modeNames}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderDisplayFeatures(){
+  const filter = document.getElementById('feature-filter').value;
+  const tbody = document.getElementById('feature-tbody');
+  const dTbody = document.getElementById('d-feature-tbody');
+  let html = '';
+  Array.from(tbody.children).forEach(tr=>{
+    const source = tr.querySelector('.feat-source')?.value || '';
+    const name = tr.querySelector('.feat-name')?.value || '';
+    const desc = tr.querySelector('.feat-desc')?.value || '';
+    if(!name && !desc) return;
+    if(filter !== 'all' && source !== filter) return;
+    html += `<tr><td>${source}</td><td>${name}</td><td>${desc}</td></tr>`;
+  });
+  dTbody.innerHTML = html || '<tr><td colspan="3">—</td></tr>';
+}
+
+function renderDisplaySkills(mods, entries){
+  const tbodyA = document.getElementById('d-skill-tbody-a');
+  const tbodyB = document.getElementById('d-skill-tbody-b');
+  if(!tbodyA || !tbodyB) return;
+
+  let htmlA = '', htmlB = '';
+  const sorted = [...window.SKILLS].sort((a,b)=>{
+    const ia = ABILITY_ORDER.indexOf(a.ability), ib = ABILITY_ORDER.indexOf(b.ability);
+    return (ia-ib) || String(a.name).localeCompare(String(b.name),'zh');
+  });
+  const half = Math.ceil(sorted.length / 2);
+  const acpPen = armorCheckPenalty();
+  sorted.forEach((sk, idx)=>{
+    const ability = skillAbility(sk.id, sk.ability);
+    const ranks = parseInt(document.getElementById('skill-'+sk.id)?.value)||0;
+    // 折叠只作用于展示页：隐藏"必须受训且等级为 0"的技能
+    if(skillFoldUntrained && sk.trained && ranks === 0) return;
+    const misc = parseInt(document.getElementById('skill-misc-'+sk.id)?.value)||0;
+    const cs = skillIsClass(sk.id);
+    const csBonus = (cs && ranks > 0) ? 3 : 0;
+    const penalty = sk.acp ? acpPen : 0;
+    const total = ranks + (mods[ability]||0) + csBonus + misc - penalty;
+
+    const favKey = 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'local');
+    let favStore = null;
+    try { favStore = JSON.parse(localStorage.getItem(favKey) || 'null'); } catch(e) { favStore = null; }
+    if (!favStore) favStore = {};
+    const favSaved = Object.prototype.hasOwnProperty.call(favStore, sk.id);
+    const isFav = favSaved ? !!favStore[sk.id] : ranks > 0;
+    const row = `<tr data-skill="${sk.id}">
+      <td class="fav-col"><button type="button" class="fav-btn ${isFav?'on':''}" data-skill="${sk.id}" title="收藏">${isFav?'★':'☆'}</button></td>
+      <td class="skill-name ${cs?'class-skill':''}">${skillLabel(sk)}</td>
+      <td class="skill-total" data-base="${total}" data-skill="${sk.id}">${total>=0?'+':''}${total}</td>
+      <td><input type="number" class="temp-input skill-temp" data-skill="${sk.id}" value="" style="width:40px"></td>
+      <td class="dice-col"><span class="dice-btn" onclick="copyExpr('1d20${total>=0?'+':''}${total}')" title="复制技能检定表达式">🎲</span></td>
+    </tr>`;
+    if(idx < half) htmlA += row; else htmlB += row;
+  });
+  tbodyA.innerHTML = htmlA;
+  tbodyB.innerHTML = htmlB;
+
+  bindSkillInteractions();
+
+  // 技能点提示（总计只读）
+  let spent = 0;
+  window.SKILLS.forEach(sk=>{ spent += parseInt(document.getElementById('skill-'+sk.id)?.value)||0; });
+  const totalPoints = parseInt(document.getElementById('b-skill-total')?.value)||0;
+  const poolEl = document.getElementById('d-pool-skill');
+  if(poolEl) poolEl.textContent = `剩余 ${totalPoints-spent} / 总计 ${totalPoints}`;
+
+  updateSkillWarning();
+}
+
+function renderDisplaySpells(entries, mods){
+  const container = document.getElementById('d-spell-pages');
+  let html = '';
+  spellPages.forEach((p, pi)=>{
+    let rows = '';
+    for(let i=0;i<=9;i++){
+      const per = parseInt(p.perDay[i])||0;
+      if(!per) continue;
+      const chips = p.chips[i] || [];
+      let chipsHtml = '';
+      for(let k=0;k<per;k++){
+        const c = chips[k] || {v:'', off:false};
+        chipsHtml += `<span class="slot-chip${c.off?' off':''}" onclick="toggleSpellChip(${pi},${i},${k},this)" title="点击切换颜色">${c.v||''}</span>`;
+      }
+      rows += `<div class="spell-slot-row">
+        <span class="slot-level">${i===0?'0环':i+'环'}</span>
+        <input type="number" class="slot-value" value="" style="width:40px"> / <span class="slot-value" style="color:var(--accent);font-weight:bold">${per}</span>
+        <span class="slot-badges">${chipsHtml}</span>
+      </div>`;
+    }
+    const known = p.known ? `<div style="margin-top:8px;font-size:12px;color:var(--text2)">当前准备：${p.known}</div>` : '';
+    html += `<div class="spell-page">
+      <div class="spell-page-head"><span class="spell-page-title">法术页 ${pi+1}</span></div>
+      ${rows ? `<div class="spell-slots">${rows}</div>` : '<div style="color:var(--text2)">未设置法术位</div>'}
+      ${known}
+    </div>`;
+  });
+  container.innerHTML = html || '<div style="color:var(--text2)">未设置法术位</div>';
+
+  const poolContainer = document.getElementById('d-pool-display');
+  const bPools = document.getElementById('pool-builder');
+  let pHtml = '';
+  Array.from(bPools.querySelectorAll('.pool-item')).forEach((div, idx)=>{
+    const name = div.querySelector('.pool-name')?.value || '—';
+    const cur = div.querySelector('.pool-current')?.value || 0;
+    const max = div.querySelector('.pool-max')?.value || 0;
+    const desc = div.querySelector('.pool-desc')?.value || '';
+    pHtml += `<div class="pool-item">
+      <span class="pool-name-ro">${name}</span>
+      <span class="pool-counter-ro"><input type="number" class="pool-cur-input" value="${cur}" data-idx="${idx}" onchange="setPoolCurrent(this)"> / ${max}</span>
+      <span class="pool-desc-ro">${desc||'—'}</span>
+    </div>`;
+  });
+  poolContainer.innerHTML = pHtml || '<div style="color:var(--text2)">无能力池</div>';
+}
+
+// 展示页修改能力池当前值 → 同步回编辑页
+function setPoolCurrent(el){
+  const idx = parseInt(el.dataset.idx)||0;
+  const items = document.querySelectorAll('#pool-builder .pool-item');
+  if(items[idx]){
+    const cur = items[idx].querySelector('.pool-current');
+    if(cur) cur.value = el.value;
+  }
+}
+
+const SLOT_LABELS = {
+  weapon:'武器', armor:'盔甲', head:'头部', headband:'头带', body:'躯体', chest:'胸部',
+  belt:'腰带', eyes:'眼睛', feet:'脚部', hands:'手部', neck:'颈部', ring:'戒指',
+  shield:'盾牌', shoulders:'肩部', wrist:'手臂', backpack:'背包'
+};
+
+// 钱袋：重量 = 数量 / 50（向下取整），与价值无关
+function updateCoinPurse(){
+  const val = id => parseFloat(document.getElementById(id)?.value)||0;
+  const pp = val('coin-pp'), gp = val('coin-gp'), sp = val('coin-sp'), cp = val('coin-cp');
+  const wpp = Math.floor(pp/50), wgp = Math.floor(gp/50), wsp = Math.floor(sp/50), wcp = Math.floor(cp/50);
+  const totalWeight = Math.floor((pp+gp+sp+cp)/50);
+  const totalGp = pp*10 + gp + sp/10 + cp/100;
+  const setT = (id,v)=>{ const el = document.getElementById(id); if(el) el.textContent = v; };
+
+  setT('cw-pp', wpp); setT('cw-gp', wgp); setT('cw-sp', wsp); setT('cw-cp', wcp); setT('cw-total', totalWeight);
+  setT('coin-total', totalGp.toFixed(2));
+
+  setT('d-coin-pp', pp); setT('d-coin-gp', gp); setT('d-coin-sp', sp); setT('d-coin-cp', cp);
+  setT('d-cw-pp', wpp); setT('d-cw-gp', wgp); setT('d-cw-sp', wsp); setT('d-cw-cp', wcp);
+  setT('d-cw-total', totalWeight);
+  setT('d-coin-total', totalGp.toFixed(2));
+}
+
+// 卷轴 / 药水 / 魔杖（无重量）
+function addScrollRow(){
+  const tbody = document.getElementById('scroll-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input type="text" class="sc-name"></td>
+    <td><input type="number" class="sc-lv" value="" min="0" max="9"></td>
+    <td><input type="number" class="sc-cl" value="" min="0"></td>
+    <td><input type="number" class="sc-qty" value="" min="0"></td>
+    <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();updateDisplay()">×</button></td>`;
+  tbody.appendChild(tr);
+  updateDisplay();
+}
+
+function renderDisplayScrolls(){
+  const tbody = document.getElementById('scroll-tbody');
+  const dT = document.getElementById('d-scroll-tbody');
+  if(!tbody || !dT) return;
+  let html = '';
+  Array.from(tbody.children).forEach(tr=>{
+    const name = tr.querySelector('.sc-name')?.value || '';
+    if(!name) return;
+    const lv = parseInt(tr.querySelector('.sc-lv')?.value)||0;
+    const cl = parseInt(tr.querySelector('.sc-cl')?.value)||0;
+    const qty = parseInt(tr.querySelector('.sc-qty')?.value)||0;
+    html += `<tr><td>${name}</td><td>${lv}</td><td>${cl}</td><td>${qty}</td></tr>`;
+  });
+  dT.innerHTML = html || '<tr><td colspan="4">—</td></tr>';
+}
+
+function renderDisplayGear(){
+  const tbody = document.getElementById('gear-tbody');
+  const dTbody = document.getElementById('d-gear-tbody');
+  const equipped = [];
+  let totalWeight=0, totalValue=0;
+  let html = '';
+
+  Array.from(tbody.children).forEach(tr=>{
+    const name = tr.querySelector('.gear-name')?.value || '';
+    const qty = parseInt(tr.querySelector('.gear-qty')?.value)||0;
+    const slot = tr.querySelector('.gear-slot')?.value || 'backpack';
+    const weight = parseFloat(tr.querySelector('.gear-weight')?.value)||0;
+    const value = parseFloat(tr.querySelector('.gear-value')?.value)||0;
+    const note = tr.querySelector('.gear-note')?.value || '';
+    if(!name) return;
+    totalWeight += weight * qty; totalValue += value;
+    if(slot !== 'backpack') equipped.push(`${SLOT_LABELS[slot]||slot}:${name}`);
+    html += `<tr><td>${name}</td><td>${qty}</td><td>${SLOT_LABELS[slot]||slot}</td><td>${weight}</td><td>${value}</td><td>${note}</td></tr>`;
+  });
+
+  dTbody.innerHTML = html || '<tr><td colspan="6">—</td></tr>';
+  document.getElementById('d-equipped').textContent = equipped.join('，') || '—';
+
+  renderDisplayLoad();
+}
+
+// 展示页「负重」表
+function renderDisplayLoad(){
+  const tbody = document.getElementById('d-load-tbody');
+  if(!tbody) return;
+  const res = computeLoad();
+  const tw = document.getElementById('total-weight')?.textContent || '0';
+  const tv = document.getElementById('total-value')?.textContent || '0';
+  tbody.innerHTML = `
+    <tr><td class="load-k">总价值</td><td class="load-v">${tv} gp</td></tr>
+    <tr><td class="load-k">总重量</td><td class="load-v">${tw} 磅</td></tr>
+    <tr><td class="load-k">负重体型</td><td class="load-v">${res.size}</td></tr>
+    <tr><td class="load-k">额外负重</td><td class="load-v">+${res.enh} 力量</td></tr>
+    <tr><td class="load-k">轻载</td><td class="load-v">${res.light} 磅</td></tr>
+    <tr><td class="load-k">中载</td><td class="load-v">${res.medium} 磅</td></tr>
+    <tr><td class="load-k">重载</td><td class="load-v">${res.heavy} 磅</td></tr>`;
+}
+
+// ==================== 交互函数 ====================
+let currentView = 'builder';
+function switchView(viewName){
+  currentView = viewName;
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById(viewName).classList.add('active');
+  const fab = document.getElementById('viewFab');
+  if(fab){
+    fab.textContent = viewName === 'builder' ? '展示' : '编辑';
+    fab.classList.toggle('is-display', viewName === 'display');
+  }
+  if(viewName==='display') updateDisplay();
+  toast(viewName === 'builder' ? '进入编辑模式' : '退出编辑模式');
+}
+function toggleView(){
+  switchView(currentView === 'builder' ? 'display' : 'builder');
+}
+
+function toggleSection(header){
+  const body = header.nextElementSibling;
+  const arrow = header.querySelector('.section-toggle');
+  body.classList.toggle('collapsed');
+  arrow.classList.toggle('collapsed');
+  arrow.textContent = body.classList.contains('collapsed') ? '▶' : '▼';
+}
+
+function addClassRow(){
+  const container = document.getElementById('class-rows');
+  const div = document.createElement('div');
+  div.className = 'class-row';
+  div.innerHTML = `<input type="text" class="cls-name" value="" placeholder="职业名" onchange="render()" style="width:120px">
+    <input type="text" class="cls-variant" value="" placeholder="变体" onchange="render()" style="width:70px;margin-left:-6px">
+    <input type="number" class="cls-level" value="1" min="1" max="20" onchange="render()" style="width:50px">
+    <button class="btn btn-del btn-sm" onclick="this.parentElement.remove();render()">×</button>`;
+  container.appendChild(div);
+  render();
+}
+
+const FEATURE_SOURCES = ['种族特性','职业特性','背景特性','缺陷','其他'];
+function featureSourceSelect(selected){
+  const v = FEATURE_SOURCES.indexOf(selected) >= 0 ? selected : '其他';
+  return FEATURE_SOURCES.map(s=>`<option value="${s}" ${s===v?'selected':''}>${s}</option>`).join('');
+}
+
+function addFeatRow(){
+  const tbody = document.getElementById('feat-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input type="text" class="ft-source" style="width:100%"></td>
+    <td><input type="text" class="ft-name" style="width:100%"></td>
+    <td><input type="text" class="ft-desc" style="width:100%"></td>
+    <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();updateDisplay()">×</button></td>`;
+  tbody.appendChild(tr);
+  updateDisplay();
+}
+
+function renderDisplayFeats(){
+  const tbody = document.getElementById('feat-tbody');
+  const dT = document.getElementById('d-feat-tbody');
+  if(!tbody || !dT) return;
+  let html = '';
+  Array.from(tbody.children).forEach(tr=>{
+    const name = tr.querySelector('.ft-name')?.value || '';
+    const source = tr.querySelector('.ft-source')?.value || '';
+    const desc = tr.querySelector('.ft-desc')?.value || '';
+    if(!source && !name && !desc) return;
+    html += `<tr><td>${source}</td><td>${name}</td><td>${desc}</td></tr>`;
+  });
+  dT.innerHTML = html || '<tr><td colspan="3">—</td></tr>';
+}
+
+function addFeatureRow(){
+  const tbody = document.getElementById('feature-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><select class="feat-source" onchange="renderFeatures();updateDisplay()" style="width:100%">${featureSourceSelect('')}</select></td>
+    <td><input type="text" class="feat-name" placeholder="名称" style="width:100%"></td>
+    <td><input type="text" class="feat-desc" placeholder="概述" style="width:100%"></td>
+    <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();renderFeatures();updateDisplay()">×</button></td>`;
+  tbody.appendChild(tr);
+  renderFeatures();
+}
+
+function renderFeatures(){
+  const filter = document.getElementById('feature-filter').value;
+  const tbody = document.getElementById('feature-tbody');
+  Array.from(tbody.children).forEach(tr=>{
+    const source = tr.querySelector('.feat-source')?.value || '';
+    tr.style.display = (filter==='all' || source===filter) ? '' : 'none';
+  });
+}
+
+function poolItemHTML(){
+  return `<div class="pool-item">
+    <input type="text" class="pool-name">
+    <div class="pool-counter"><input type="number" class="pool-current" value="" min="0"> / <input type="number" class="pool-max" value="" min="0"></div>
+    <input type="text" class="pool-desc" placeholder="简述">
+    <button class="btn btn-del btn-sm" onclick="this.closest('.pool-item').remove();render()">×</button>
+  </div>`;
+}
+
+// 点一次 → 新增一个能力池
+function addPoolRow(){
+  const container = document.getElementById('pool-builder');
+  const row = document.createElement('div');
+  row.className = 'pool-row';
+  row.innerHTML = poolItemHTML();
+  container.appendChild(row);
+}
+
+// ==================== 资源记录（LV 表） ====================
+const LEVEL_COUNT = 20;
+const FAVORED_OPTIONS = ['HP','技能点','其他'];
+
+function levelRowHTML(lv){
+  const abilityOn = lv % 4 === 0;   // 4/8/12/16/20 可选属性
+  const featOn = lv % 2 === 1;      // 奇数等级可填专长
+  const opts = ABILITY_ORDER.map(k=>`<option value="${k}">${ABILITY_LABEL[k]}</option>`).join('');
+  const favOpts = FAVORED_OPTIONS.map(v=>`<option value="${v}">${v}</option>`).join('');
+  return `<tr>
+    <td class="lv-no">${lv}</td>
+    <td class="${abilityOn?'lv-blue':'lv-gray'}">${abilityOn ? `<select class="lv-ability"><option value=""></option>${opts}</select>` : ''}</td>
+    <td><input type="text" class="lv-cls"></td>
+    <td><input type="text" class="lv-variant"></td>
+    <td class="${featOn?'':'lv-gray'}">${featOn ? `<input type="text" class="lv-feat">` : ''}</td>
+    <td><select class="lv-favored"><option value=""></option>${favOpts}</select></td>
+  </tr>`;
+}
+
+function renderLevels(){
+  const tbodyA = document.getElementById('lv-tbody-a');
+  const tbodyB = document.getElementById('lv-tbody-b');
+  if(!tbodyA || !tbodyB || tbodyA.children.length) return;
+  let htmlA = '', htmlB = '';
+  for(let lv=1; lv<=LEVEL_COUNT; lv++){
+    if(lv <= 10) htmlA += levelRowHTML(lv); else htmlB += levelRowHTML(lv);
+  }
+  tbodyA.innerHTML = htmlA;
+  tbodyB.innerHTML = htmlB;
+
+
+}
+
+function levelRows(){
+  return Array.from(document.querySelectorAll('#lv-tbody-a tr, #lv-tbody-b tr'));
+}
+
+function renderDisplayLevels(){
+  const tbodyA = document.getElementById('d-lv-tbody-a');
+  const tbodyB = document.getElementById('d-lv-tbody-b');
+  if(!tbodyA || !tbodyB) return;
+  let htmlA = '', htmlB = '';
+  levelRows().forEach((tr, i)=>{
+    const lv = i + 1;
+    const sel = tr.querySelector('select.lv-ability');
+    const abilityOn = !!sel;
+    const featOn = lv % 2 === 1;
+    const ability = sel ? (ABILITY_LABEL[sel.value] || '') : '';
+    const cls = tr.querySelector('.lv-cls')?.value || '';
+    const variant = tr.querySelector('.lv-variant')?.value || '';
+    const feat = tr.querySelector('.lv-feat')?.value || '';
+    const favored = tr.querySelector('.lv-favored')?.value || '';
+    const row = `<tr>
+      <td class="lv-no">${lv}</td>
+      <td class="${abilityOn?'lv-blue':'lv-gray'}">${ability}</td>
+      <td>${cls}</td>
+      <td>${variant}</td>
+      <td class="${featOn?'':'lv-gray'}">${feat}</td>
+      <td>${favored}</td>
+    </tr>`;
+    if(lv <= 10) htmlA += row; else htmlB += row;
+  });
+  tbodyA.innerHTML = htmlA;
+  tbodyB.innerHTML = htmlB;
+
+
+}
+
+function addGearRow(){
+  const tbody = document.getElementById('gear-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input type="text" class="gear-name"></td>
+    <td><input type="number" class="gear-qty" value="" min="0"></td>
+    <td><select class="gear-slot" onchange="handleGearSlot(this)">${getSlotOptions('backpack')}</select></td>
+    <td><input type="number" class="gear-weight" value=""></td>
+    <td><input type="number" class="gear-value" value=""></td>
+    <td><input type="text" class="gear-note"></td>
+    <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();render()">×</button></td>`;
+  tbody.appendChild(tr);
+  render();
+}
+
+function handleGearSlot(select){
+  const slot = select.value;
+  if(slot==='weapon' || slot==='ring' || slot==='backpack') return;
+  const tr = select.closest('tr');
+  const tbody = tr.parentElement;
+  Array.from(tbody.children).forEach(other=>{
+    if(other===tr) return;
+    if(other.querySelector('.gear-slot').value === slot){
+      other.querySelector('.gear-slot').value = 'backpack';
+    }
+  });
+  render();
+}
+
+function updateGearStats(){
+  const tbody = document.getElementById('gear-tbody');
+  let totalWeight=0, totalValue=0;
+  Array.from(tbody.children).forEach(tr=>{
+    const qty = parseInt(tr.querySelector('.gear-qty')?.value)||0;
+    const w = parseFloat(tr.querySelector('.gear-weight')?.value)||0;
+    totalWeight += w * qty;            // 单件重量 × 数量
+    totalValue += parseFloat(tr.querySelector('.gear-value')?.value)||0;
+  });
+  // 护甲 / 盾牌 重量也计入总负重
+  totalWeight += (parseFloat(document.getElementById('b-armor-weight')?.value)||0)
+               + (parseFloat(document.getElementById('b-shield-weight')?.value)||0);
+  document.getElementById('total-weight').textContent = totalWeight.toFixed(1);
+  document.getElementById('total-value').textContent = totalValue.toFixed(0);
+  computeLoad();
+}
+
+// ==================== 负重（PF1e 负重表） ====================
+const CARRY_TABLE = {
+  1:[3,6,10], 2:[6,13,20], 3:[10,20,30], 4:[13,26,40], 5:[16,33,50],
+  6:[20,40,60], 7:[23,46,70], 8:[26,53,80], 9:[30,60,90], 10:[33,66,100],
+  11:[38,76,115], 12:[43,86,130], 13:[50,100,150], 14:[58,116,175], 15:[66,133,200],
+  16:[76,153,230], 17:[86,173,260], 18:[100,200,300], 19:[116,233,350], 20:[133,266,400],
+  21:[153,306,460], 22:[173,346,520], 23:[200,400,600], 24:[233,466,700], 25:[266,533,800],
+  26:[306,613,920], 27:[346,693,1040], 28:[400,801,1200], 29:[466,933,1400]
+};
+// 二足 / 四足 负重倍率
+const SIZE_MULT = {
+  '超微型（二足）':1/8, '超微型（四足）':1/4,
+  '微型（二足）':1/4, '微型（四足）':1/2,
+  '超小型（二足）':1/2, '超小型（四足）':3/4,
+  '小型（二足）':3/4, '小型（四足）':1,
+  '中型（二足）':1, '中型（四足）':1.5,
+  '大型（二足）':2, '大型（四足）':3,
+  '超大型（二足）':4, '超大型（四足）':6,
+  '巨型（二足）':8, '巨型（四足）':12,
+  '超巨型（二足）':16, '超巨型（四足）':24
+};
+
+function computeLoad(){
+  const str = parseInt(document.getElementById('ab-str')?.value)||10;
+  const sizeEl = document.getElementById('load-size');
+  const enhEl = document.getElementById('load-enh');
+  const size = sizeEl ? sizeEl.value : '中型';
+  const enh = enhEl ? (parseInt(enhEl.value)||0) : 0;
+
+  let s = str + enh, extra = 0;   // 额外负重视为额外力量
+  while(s > 29){ s -= 10; extra++; }
+  if(s < 1) s = 1;
+  const base = CARRY_TABLE[s] || CARRY_TABLE[10];
+  const mult = Math.pow(4, extra) * (SIZE_MULT[size] || 1);
+  const fmt = v => String(Math.round(v*10)/10);
+
+  const res = {
+    size, enh,
+    light: fmt(base[0]*mult),
+    medium: fmt(base[1]*mult),
+    heavy: fmt(base[2]*mult)
+  };
+  const set = (id,v)=>{ const el = document.getElementById(id); if(el) el.textContent = v; };
+  set('load-l', res.light); set('load-m', res.medium); set('load-h', res.heavy);
+  return res;
+}
+
+// ==================== 轻提示 / 复制表达式 ====================
+let __toastTimer = null;
+function toast(msg, duration){
+  let el = document.getElementById('pf-toast');
+  if(!el){ el = document.createElement('div'); el.id='pf-toast'; el.className='toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  void el.offsetWidth;               // 强制重排，保证过渡生效
+  el.classList.add('show');
+  clearTimeout(__toastTimer);
+  __toastTimer = setTimeout(()=>{ el.classList.remove('show'); }, duration || 1800);
+}
+
+// 点击骰子 → 复制表达式 → 浮窗提示（不再弹 alert）
+function copyExpr(expr){
+  const text = String(expr == null ? '' : expr);
+  if(!text) return;
+  const ok = ()=>toast('已成功复制表达式到剪贴板！');
+  const fallback = ()=>{
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const done = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(done) ok(); else toast('复制失败，请手动复制：' + text);
+    }catch(e){ toast('复制失败：' + (e && e.message ? e.message : e)); }
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(ok).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+function rollInit(){
+  const init = parseInt(document.getElementById('d-init-final').textContent)||0;
+  copyExpr(`1d20${init>=0?'+':''}${init}`);
+}
+
+// ==================== 导出/导入 ====================
+function exportCharacter(){
+  const data = collectCharacterData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (document.getElementById('b-name').value || 'character') + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importCharacter(){
+  document.getElementById('import-file').click();
+}
+
+function handleImport(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      loadCharacterData(data);
+      render();
+      alert('角色卡导入成功');
+    }catch(err){
+      alert('导入失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+function collectCharacterData(){
+  // 读取工具：n=数字输入, t=文本输入, numSpan=渲染后写进 span 的派生值
+  const n = (id, d=0) => { const el = document.getElementById(id); if(!el) return d; const v = parseInt(el.value); return Number.isFinite(v) ? v : d; };
+  const t = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const numSpan = (id, d=0) => { const el = document.getElementById(id); if(!el) return d; const v = parseFloat(String(el.textContent).replace('+','')); return Number.isFinite(v) ? v : d; };
+
+  const clsEntries = getClassEntries();
+  const mods = getAbilityMods();
+  const strScore = n('ab-str', 10);
+  const hpMax = n('b-hp-max');
+  // 当前生命/临时/非致命不再记录在卡上，由枭熊端负责；这里用最大值占位
+  const hpCurrent = hpMax;
+
+  // 负重合计（与卡页底部显示同源）
+  let gearWeight = 0;
+  document.querySelectorAll('#gear-tbody tr').forEach(tr=>{
+    gearWeight += parseFloat(tr.querySelector('.gear-weight')?.value)||0;
+  });
+
+  // 技能：只导出有投入或勾了本职的条目，避免 40+ 个空条目
+  const skillMap = {};
+  (window.SKILLS||[]).forEach(sk=>{
+    const ranks = n('skill-'+sk.id);
+    const misc = n('skill-misc-'+sk.id);
+    const classSkill = skillIsClass(sk.id);
+    if(ranks || misc || classSkill) skillMap[sk.id] = {
+      ranks, misc,
+      ability: skillAbility(sk.id, sk.ability),
+      classSkill
+    };
+  });
+
+  // 法术位：按法术页保存
+  const spellPagesData = spellPages.map(p=>({
+    perDay: Object.assign({}, p.perDay),
+    known: p.known || '',
+    chips: JSON.parse(JSON.stringify(p.chips || {}))
+  }));
+
+  return {
+    schema: 'pf1e-card',
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    // 派生值：由本页规则算好，OBR 端直接显示，避免重复实现 PF1e 数学
+    derived: {
+      hpMax, hpCurrent,
+      bab: calcBAB(clsEntries),
+      speed: parseInt(document.getElementById('b-speed')?.value) || 0,
+      runSpeed: (parseInt(document.getElementById('b-speed')?.value) || 0) * ((document.getElementById('b-armor-type')?.value || '').includes('重甲') ? 3 : 4),
+      totalLevel: clsEntries.reduce((s,e)=>s+e.level,0),
+      abilityMods: { str: mods.str, dex: mods.dex, con: mods.con, int: mods.int, wis: mods.wis, cha: mods.cha },
+      ac: numSpan('b-ac-final', 10),
+      touch: numSpan('b-touch-final', 10),
+      flatFooted: numSpan('b-flat-final', 10),
+      fort: numSpan('b-fort-final'),
+      ref: numSpan('b-ref-final'),
+      will: numSpan('b-will-final'),
+      saves: { fort: numSpan('b-fort-final'), ref: numSpan('b-ref-final'), will: numSpan('b-will-final') },
+      cmb: numSpan('b-cmb-final'),
+      cmd: numSpan('b-cmd-final', 10),
+      initiative: numSpan('b-init-final'),
+      speed: parseInt(document.getElementById('b-speed')?.value) || 0,
+      runSpeed: (parseInt(document.getElementById('b-speed')?.value) || 0) * ((document.getElementById('b-armor-type')?.value || '').includes('重甲') ? 3 : 4),
+      vision: document.getElementById('b-vision-base').value || '',
+      carryWeight: Math.round(gearWeight * 10) / 10,
+      carryCapacity: { light: strScore * 10, medium: strScore * 20, heavy: strScore * 30 },
+      skillTotals: Object.fromEntries((window.SKILLS||[]).map(sk=>[sk.id, numSpan('skill-total-'+sk.id)])),
+      spellSlots: window.__spellSlotTotals || {},
+      pools: Array.from(document.querySelectorAll('#pool-builder .pool-item')).map(r=>({
+        name: r.querySelector('.pool-name')?.value || '',
+        current: parseInt(r.querySelector('.pool-current')?.value)||0,
+        max: parseInt(r.querySelector('.pool-max')?.value)||0,
+        desc: r.querySelector('.pool-desc')?.value || ''
+      })).filter(p=>p.name || p.desc),
+      spellcasting: {
+        cl: n('b-spell-cl'),
+        keyAbility: document.getElementById('b-spell-ability')?.value || 'int',
+        keyAbilityScore: (() => {
+          const ab = document.getElementById('b-spell-ability')?.value || 'int';
+          return parseInt(document.getElementById('ab-'+ab)?.value)||10;
+        })(),
+        failureRate: Math.abs(parseFloat(document.getElementById('b-armor-asf')?.value)||0)
+                   + Math.abs(parseFloat(document.getElementById('b-shield-asf')?.value)||0),
+        baseDC: 10 + abilityMod(parseInt(document.getElementById('ab-'+(document.getElementById('b-spell-ability')?.value||'int'))?.value)||10),
+        pages: spellPagesData.map(p=>{
+          const prepared = {};
+          Object.entries(p.chips || {}).forEach(([ring, arr])=>{
+            const names = (arr||[]).map(c=>c.v||'').filter(Boolean);
+            if(names.length) prepared[ring] = names;
+          });
+          return { perDay: Object.assign({}, p.perDay), prepared };
+        })
+      }
+    },
+    meta: {
+      name: document.getElementById('b-name').value,
+      player: document.getElementById('b-player').value,
+      race: document.getElementById('b-race').value,
+      raceName: document.getElementById('b-race').value,
+      size: sizeLabel(),
+      align: document.getElementById('b-align').value,
+      background: document.getElementById('b-background').value,
+      speed: parseInt(document.getElementById('b-speed')?.value) || 0,
+      runSpeed: (parseInt(document.getElementById('b-speed')?.value) || 0) * ((document.getElementById('b-armor-type')?.value || '').includes('重甲') ? 3 : 4),
+      totalLevel: clsEntries.reduce((s,e)=>s+e.level,0)
+    },
+    classes: Array.from(document.querySelectorAll('#class-rows .class-row')).map(r=>({
+      name: (r.querySelector('.cls-name')?.value || '').trim(),
+      variant: (r.querySelector('.cls-variant')?.value || '').trim(),
+      level: parseInt(r.querySelector('.cls-level')?.value)||0
+    })),
+    abilities: {
+      str: parseInt(document.getElementById('ab-str').value)||10,
+      dex: parseInt(document.getElementById('ab-dex').value)||10,
+      con: parseInt(document.getElementById('ab-con').value)||10,
+      int: parseInt(document.getElementById('ab-int').value)||10,
+      wis: parseInt(document.getElementById('ab-wis').value)||10,
+      cha: parseInt(document.getElementById('ab-cha').value)||10
+    },
+    // 手填的战斗基础值（不再由职业/种族表推导）
+    combat: {
+      bab: n('b-bab'),
+      size: sizeLabel()
+    },
+    skillPoints: { total: n('b-skill-total') },
+    defense: {
+      hpBase: hpMax,
+      hpCurrent: hpCurrent,
+      nonlethal: 0,
+      tempHP: 0,
+      armor: Math.abs(parseInt(document.getElementById('b-armor-ac').value)||0),
+      shield: Math.abs(parseInt(document.getElementById('b-shield-ac').value)||0),
+      nat: parseInt(document.getElementById('b-nat').value)||0,
+      dodge: parseInt(document.getElementById('b-dodge').value)||0,
+      deflect: parseInt(document.getElementById('b-deflect').value)||0,
+      acMisc: parseInt(document.getElementById('b-ac-misc').value)||0,
+      // 豁免：基础 + 其他（属性自动）
+      fortBase: n('b-fort-base'),
+      fortOther: n('b-fort-other'),
+      refBase: n('b-ref-base'),
+      refOther: n('b-ref-other'),
+      willBase: n('b-will-base'),
+      willOther: n('b-will-other'),
+      // CMB / CMD
+      cmbOther: n('b-cmb-other'),
+      cmbAbility: document.getElementById('b-cmb-ability').value,
+      cmdOther: n('b-cmd-other'),
+      specialDef: document.getElementById('b-special-def').value
+    },
+    vision: {
+      base: document.getElementById('b-vision-base').value,
+      misc: 0
+    },
+    initiative: { feat: n('b-init-feat'), misc: n('b-init-misc') },
+    equipment: {
+      armor: {
+        name: document.getElementById('b-armor-name').value,
+        type: document.getElementById('b-armor-type').value,
+        price: n('b-armor-price'), ac: n('b-armor-ac'), maxDex: n('b-armor-maxdex'),
+        acp: n('b-armor-acp'), asf: n('b-armor-asf'), weight: n('b-armor-weight'),
+        note: document.getElementById('b-armor-note').value
+      },
+      shield: {
+        name: document.getElementById('b-shield-name').value,
+        price: n('b-shield-price'), ac: n('b-shield-ac'), acp: n('b-shield-acp'),
+        asf: n('b-shield-asf'), weight: n('b-shield-weight'),
+        note: document.getElementById('b-shield-note').value
+      }
+    },
+    attacks: Array.from(document.querySelectorAll('#attack-list .attack-card')).map(r=>({
+      type: r.querySelector('.atk-type').value,
+      weapon: r.querySelector('.atk-weapon').value,
+      weaponType: r.querySelector('.atk-weapon-type').value,
+      range: r.querySelector('.atk-range').value,
+      damageType: r.querySelector('.atk-damage-type').value,
+      modes: Array.from(r.querySelectorAll('.atk-mode:checked')).map(c=>c.value),
+      abAbility: r.querySelector('.atk-ab-ability').value,
+      abM1: parseInt(r.querySelector('.atk-ab-m1').value)||0,
+      abM2: parseInt(r.querySelector('.atk-ab-m2').value)||0,
+      abTotal: parseInt(String(r.querySelector('.atk-ab-total').textContent).replace('+',''))||0,
+      damage: r.querySelector('.atk-damage').value,
+      dmgAbility: r.querySelector('.atk-dmg-ability').value,
+      dmgM1: parseInt(r.querySelector('.atk-dmg-m1').value)||0,
+      dmgM2: parseInt(r.querySelector('.atk-dmg-m2').value)||0
+    })).filter(a=>a.weapon||a.weaponType||a.damage||a.range||a.damageType||a.modes.length||a.abM1||a.abM2||a.dmgM1||a.dmgM2),
+    specialAtk: document.getElementById('b-special-atk').value,
+    feats: Array.from(document.querySelectorAll('#feat-tbody tr')).map(r=>({
+      name: r.querySelector('.ft-name')?.value || '',
+      source: r.querySelector('.ft-source')?.value || '',
+      desc: r.querySelector('.ft-desc')?.value || ''
+    })).filter(f=>f.name||f.source||f.desc),
+    features: Array.from(document.querySelectorAll('#feature-tbody tr')).map(r=>({
+      source: r.querySelector('.feat-source')?.value||'',
+      name: r.querySelector('.feat-name')?.value||'',
+      desc: r.querySelector('.feat-desc')?.value||''
+    })).filter(f=>f.name||f.desc),
+    skills: skillMap,
+    spells: {
+      cl: n('b-spell-cl'),
+      keyAbility: document.getElementById('b-spell-ability')?.value || 'int',
+      pages: spellPagesData
+    },
+    pools: Array.from(document.querySelectorAll('#pool-builder .pool-item')).map(r=>({
+      name: r.querySelector('.pool-name')?.value||'',
+      current: parseInt(r.querySelector('.pool-current')?.value)||0,
+      max: parseInt(r.querySelector('.pool-max')?.value)||0,
+      desc: r.querySelector('.pool-desc')?.value||''
+    })).filter(p=>p.name||p.desc),
+    levels: levelRows().map((tr, i)=>{
+      const sel = tr.querySelector('select.lv-ability');
+      return {
+        lv: i + 1,
+        ability: sel ? sel.value : '',
+        cls: tr.querySelector('.lv-cls')?.value || '',
+        variant: tr.querySelector('.lv-variant')?.value || '',
+        feat: tr.querySelector('.lv-feat')?.value || '',
+        favored: tr.querySelector('.lv-favored')?.value || ''
+      };
+    }),
+    gear: Array.from(document.querySelectorAll('#gear-tbody tr')).map(r=>({
+      name: r.querySelector('.gear-name')?.value||'',
+      qty: parseInt(r.querySelector('.gear-qty')?.value)||0,
+      slot: r.querySelector('.gear-slot')?.value||'backpack',
+      weight: parseFloat(r.querySelector('.gear-weight')?.value)||0,
+      value: parseFloat(r.querySelector('.gear-value')?.value)||0,
+      note: r.querySelector('.gear-note')?.value||''
+    })).filter(g=>g.name),
+    coins: {
+      pp: parseInt(document.getElementById('coin-pp')?.value)||0,
+      gp: parseInt(document.getElementById('coin-gp')?.value)||0,
+      sp: parseInt(document.getElementById('coin-sp')?.value)||0,
+      cp: parseInt(document.getElementById('coin-cp')?.value)||0
+    },
+    scrolls: Array.from(document.querySelectorAll('#scroll-tbody tr')).map(r=>({
+      name: r.querySelector('.sc-name')?.value||'',
+      level: parseInt(r.querySelector('.sc-lv')?.value)||0,
+      cl: parseInt(r.querySelector('.sc-cl')?.value)||0,
+      qty: parseInt(r.querySelector('.sc-qty')?.value)||0
+    })).filter(s=>s.name),
+    carry: {
+      size: document.getElementById('load-size')?.value || '中型',
+      enhance: parseInt(document.getElementById('load-enh')?.value)||0
+    }
+  };
+}
+
+function loadCharacterData(data){
+  if(data.meta){
+    document.getElementById('b-name').value = data.meta.name||'';
+    document.getElementById('b-player').value = data.meta.player||'';
+    document.getElementById('b-race').value = data.meta.race||'';
+    document.getElementById('b-align').value = data.meta.align||'';
+    document.getElementById('b-background').value = data.meta.background||'';
+  }
+  if(data.combat){
+    document.getElementById('b-bab').value = data.combat.bab||0;
+  }
+  if(data.skillPoints){
+    document.getElementById('b-skill-total').value = data.skillPoints.total||0;
+  }
+  if(data.classes){
+    const container = document.getElementById('class-rows');
+    container.innerHTML = '';
+    data.classes.forEach((c,idx)=>{
+      const div = document.createElement('div');
+      div.className = 'class-row';
+      div.innerHTML = `<input type="text" class="cls-name" value="${c.name||''}" placeholder="职业名" onchange="render()" style="width:120px">
+        <input type="text" class="cls-variant" value="${c.variant||''}" placeholder="变体" onchange="render()" style="width:70px;margin-left:-6px">
+        <input type="number" class="cls-level" value="${c.level||1}" min="1" max="20" onchange="render()" style="width:50px">
+        <button class="btn btn-del btn-sm" onclick="this.parentElement.remove();render()">×</button>`;
+      container.appendChild(div);
+    });
+  }
+  if(data.abilities){
+    Object.entries(data.abilities).forEach(([k,v])=>{
+      const el = document.getElementById('ab-'+k);
+      if(el) el.value = v;
+    });
+  }
+  if(data.defense){
+    const d = data.defense;
+    document.getElementById('b-hp-max').value = d.hpBase || 0;
+    document.getElementById('b-fort-base').value = d.fortBase||0;
+    document.getElementById('b-fort-other').value = d.fortOther||0;
+    document.getElementById('b-ref-base').value = d.refBase||0;
+    document.getElementById('b-ref-other').value = d.refOther||0;
+    document.getElementById('b-will-base').value = d.willBase||0;
+    document.getElementById('b-will-other').value = d.willOther||0;
+    document.getElementById('b-armor').textContent = d.armor||0;
+    document.getElementById('b-shield').textContent = d.shield||0;
+    document.getElementById('b-nat').value = d.nat||0;
+    document.getElementById('b-dodge').value = d.dodge||0;
+    document.getElementById('b-deflect').value = d.deflect||0;
+    document.getElementById('b-ac-misc').value = d.acMisc||0;
+    document.getElementById('b-cmb-other').value = d.cmbOther||0;
+    document.getElementById('b-cmb-ability').value = d.cmbAbility||'str';
+    document.getElementById('b-cmd-other').value = d.cmdOther||0;
+    document.getElementById('b-special-def').value = d.specialDef||'';
+  }
+  if(data.vision){
+    document.getElementById('b-vision-base').value = data.vision.base||'';
+  }
+  if(data.initiative){
+    document.getElementById('b-init-feat').value = data.initiative.feat||0;
+    document.getElementById('b-init-misc').value = data.initiative.misc||0;
+  }
+  if(data.attacks){
+    const list = document.getElementById('attack-list');
+    list.innerHTML = '';
+    data.attacks.forEach((a,idx)=>{
+      list.insertAdjacentHTML('beforeend', createAttackRowHTML(idx, a.modes));
+      const card = list.lastElementChild;
+      card.querySelector('.atk-type').value = a.type || '近战';
+      card.querySelector('.atk-weapon').value = a.weapon || '';
+      card.querySelector('.atk-weapon-type').value = a.weaponType || '';
+      card.querySelector('.atk-range').value = a.range || '';
+      card.querySelector('.atk-damage-type').value = a.damageType || '';
+      card.querySelector('.atk-ab-ability').value = a.abAbility || 'str';
+      card.querySelector('.atk-ab-m1').value = a.abM1 || 0;
+      card.querySelector('.atk-ab-m2').value = a.abM2 || 0;
+      card.querySelector('.atk-damage').value = a.damage || '';
+      card.querySelector('.atk-dmg-ability').value = a.dmgAbility || 'str';
+      card.querySelector('.atk-dmg-m1').value = a.dmgM1 || 0;
+      card.querySelector('.atk-dmg-m2').value = a.dmgM2 || 0;
+    });
+  }
+  if(data.specialAtk) document.getElementById('b-special-atk').value = data.specialAtk;
+  if(data.feats){
+    const tbody = document.getElementById('feat-tbody');
+    tbody.innerHTML = '';
+    data.feats.forEach(f=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td><input type="text" class="ft-source" value="${f.source||''}" style="width:100%"></td>
+        <td><input type="text" class="ft-name" value="${f.name||''}" style="width:100%"></td>
+        <td><input type="text" class="ft-desc" value="${f.desc||''}" style="width:100%"></td>
+        <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();updateDisplay()">×</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  if(data.features){
+    const tbody = document.getElementById('feature-tbody');
+    tbody.innerHTML = '';
+    data.features.forEach(f=>{
+      if(f.source === '专长') return;   // 专长已独立成板块，旧条目直接忽略
+      const tr = document.createElement('tr');
+      const src = f.source || '';
+      tr.innerHTML = `<td><select class="feat-source" onchange="renderFeatures();updateDisplay()" style="width:100%">${featureSourceSelect(src)}</select></td>
+        <td><input type="text" class="feat-name" value="${f.name||''}" style="width:100%"></td>
+        <td><input type="text" class="feat-desc" value="${f.desc||''}" style="width:100%"></td>
+        <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();renderFeatures();updateDisplay()">×</button></td>`;
+      tbody.appendChild(tr);
+    });
+    renderFeatures();
+  }
+  if(data.skills){
+    // 技能行在 renderSkills 里才建出来，先缓存，等渲染时回填
+    window.__pendingSkills = data.skills;
+  }
+  if(data.spells){
+    const clEl = document.getElementById('b-spell-cl');
+    if(clEl) clEl.value = data.spells.cl ?? '';
+    if(document.getElementById('b-speed') && data.meta && data.meta.speed != null) document.getElementById('b-speed').value = data.meta.speed;
+    const abEl = document.getElementById('b-spell-ability');
+    if(abEl && data.spells.keyAbility) abEl.value = data.spells.keyAbility;
+  }
+  if(data.spells && Array.isArray(data.spells.pages) && data.spells.pages.length){
+    spellPages = data.spells.pages.map(p=>({
+      perDay: Object.assign({}, p.perDay || {}),
+      known: p.known || '',
+      chips: JSON.parse(JSON.stringify(p.chips || {}))
+    }));
+    renderSpellPages();
+  }
+  if(data.pools){
+    const container = document.getElementById('pool-builder');
+    container.innerHTML = '';
+    data.pools.forEach(p=>{
+      const row = document.createElement('div');
+      row.className = 'pool-row';
+      row.innerHTML = `<div class="pool-item">
+        <input type="text" class="pool-name" value="${p.name||''}">
+        <div class="pool-counter"><input type="number" class="pool-current" value="${p.current ?? ""}" min="0"> / <input type="number" class="pool-max" value="${p.max ?? ""}" min="0"></div>
+        <input type="text" class="pool-desc" placeholder="简述" value="${p.desc||''}">
+        <button class="btn btn-del btn-sm" onclick="this.closest('.pool-item').remove();render()">×</button>
+      </div>`;
+      container.appendChild(row);
+    });
+  }
+  if(data.levels){
+    renderLevels();
+    const rows = levelRows();
+    data.levels.forEach((L, i)=>{
+      const tr = rows[i];
+      if(!tr) return;
+      const sel = tr.querySelector('select.lv-ability');
+      if(sel && L.ability) sel.value = L.ability;
+      const set = (cls, val)=>{ const el = tr.querySelector('.'+cls); if(el) el.value = val||''; };
+      set('lv-cls', L.cls);
+      set('lv-variant', L.variant);
+      set('lv-feat', L.feat);
+      set('lv-favored', L.favored);
+    });
+  }
+  if(data.gear){
+    const tbody = document.getElementById('gear-tbody');
+    tbody.innerHTML = '';
+    data.gear.forEach(g=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td><input type="text" class="gear-name" value="${g.name||''}"></td>
+        <td><input type="number" class="gear-qty" value="${g.qty ?? ""}" min="0"></td>
+        <td><select class="gear-slot" onchange="handleGearSlot(this)">${getSlotOptions(g.slot)}</select></td>
+        <td><input type="number" class="gear-weight" value="${g.weight ?? ""}"></td>
+        <td><input type="number" class="gear-value" value="${g.value ?? ""}"></td>
+        <td><input type="text" class="gear-note" value="${g.note||''}"></td>
+        <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();render()">×</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  if(data.coins){
+    ['pp','gp','sp','cp'].forEach(k=>{
+      const el = document.getElementById('coin-'+k);
+      if(el) el.value = data.coins[k]||0;
+    });
+  }
+  if(data.carry){
+    const sizeEl = document.getElementById('load-size');
+    if(sizeEl) sizeEl.value = data.carry.size || '中型';
+    const enhEl = document.getElementById('load-enh');
+    if(enhEl) enhEl.value = data.carry.enhance || 0;
+  }
+  if(data.equipment){
+    const a = data.equipment.armor || {};
+    const s = data.equipment.shield || {};
+    document.getElementById('b-armor-name').value = a.name || '';
+    document.getElementById('b-armor-type').value = a.type || '重甲';
+    ['price','ac','maxdex','acp','asf','weight'].forEach(k=>{
+      const el = document.getElementById('b-armor-'+k);
+      if(el) el.value = a[k] || 0;
+    });
+    document.getElementById('b-armor-note').value = a.note || '';
+    document.getElementById('b-shield-name').value = s.name || '';
+    ['price','ac','acp','asf','weight'].forEach(k=>{
+      const el = document.getElementById('b-shield-'+k);
+      if(el) el.value = s[k] || 0;
+    });
+    document.getElementById('b-shield-note').value = s.note || '';
+  }
+  if(data.scrolls){
+    const tbody = document.getElementById('scroll-tbody');
+    tbody.innerHTML = '';
+    data.scrolls.forEach(s=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td><input type="text" class="sc-name" value="${s.name||''}"></td>
+        <td><input type="number" class="sc-lv" value="${s.level ?? ""}" min="0" max="9"></td>
+        <td><input type="number" class="sc-cl" value="${s.cl ?? ""}" min="0"></td>
+        <td><input type="number" class="sc-qty" value="${s.qty ?? ""}" min="0"></td>
+        <td><button class="btn btn-del btn-sm" onclick="this.closest('tr').remove();updateDisplay()">×</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+}
+
+function getSlotOptions(selected){
+  const opts = [
+    ['weapon','武器'],['head','头部'],['headband','头带'],
+    ['body','躯体'],['chest','胸部'],['belt','腰带'],['eyes','眼睛'],
+    ['feet','脚部'],['hands','手部'],['neck','颈部'],['ring','戒指'],
+    ['shoulders','肩部'],['wrist','手臂'],['backpack','背包']
+  ];
+  return opts.map(([k,v])=>`<option value="${k}"${k===selected?' selected':''}>${v}</option>`).join('');
+}
+
+
+
+// 初始化
+// ==================== 角色肖像（仅本地） ====================
+// 肖像不进入导出 JSON、不进入 OBR 卡面，只存在本机 localStorage。
+const PORTRAIT_KEY = 'pf-card-portrait-v2';
+function applyPortrait(src){
+  ['portrait','d-portrait'].forEach(prefix=>{
+    const img = document.getElementById(prefix+'-img');
+    const hint = document.getElementById(prefix+'-hint');
+    if(img){ if(src){ img.src = src; img.style.display = 'block'; } else { img.removeAttribute('src'); img.style.display = 'none'; } }
+    if(hint) hint.style.display = src ? 'none' : 'block';
+  });
+}
+function pickPortrait(){ document.getElementById('portrait-file')?.click(); }
+function clearPortrait(){
+  try{ localStorage.removeItem(PORTRAIT_KEY); }catch(e){}
+  applyPortrait(null);
+  const input = document.getElementById('portrait-file');
+  if(input) input.value = '';
+  toast('已清除肖像');
+}
+function handlePortrait(ev){
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = '';
+  if(!file) return;
+  if(file.size > 2*1024*1024){ alert('图片超过 2MB，请压缩后再试'); return; }
+  const reader = new FileReader();
+  reader.onload = e=>{
+    const src = e.target.result;
+    try{ localStorage.setItem(PORTRAIT_KEY, src); }
+    catch(err){ toast('图片太大，本地无法保存'); }
+    applyPortrait(src);
+  };
+  reader.readAsDataURL(file);
+}
+
+// ==================== 本机保存（手动） ====================
+// 只有点「保存角色」才写入本机；不做自动保存。
+// 跨设备 / 清缓存都会丢，长期保存请用「导出角色」下载 JSON。
+const LOCAL_SAVE_KEY = 'pf-card-local-save-v2';
+function saveCharacterLocal(){
+  try{
+    localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(collectCharacterData()));
+    toast('已保存到本机！清除缓存会导致数据丢失，建议点击【导出角色】下载JSON文件并手动保存', 6000);
+  }catch(e){
+    toast('保存失败：' + (e && e.message ? e.message : e), 5000);
+  }
+}
+function restoreLocalSave(){
+  try{
+    const raw = localStorage.getItem(LOCAL_SAVE_KEY);
+    if(!raw) return false;
+    const data = JSON.parse(raw);
+    if(!data || data.schema !== 'pf1e-card') return false;
+    loadCharacterData(data);
+    return true;
+  }catch(e){ return false; }
+}
+
+
+async function initViewerMode(params){
+  document.body.classList.add("pf1e-viewer");
+  addAttackRow(); addFeatRow(); addFeatureRow(); addPoolRow(); addGearRow(); addScrollRow(); renderLevels();
+  try{
+    const res = await fetch(params.get("data_url"), {cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if(!data || data.schema !== "pf1e-card"){
+      throw new Error("仅支持 PF1E 角色卡（schema: pf1e-card）");
+    }
+    loadCharacterData(data);
+    render();
+    switchView("display");
+    const t=document.getElementById("pf-toast"); if(t) t.remove();
+  }catch(err){
+    const box=document.createElement("div");
+    box.id="pf-view-error";
+    box.textContent="角色卡数据加载失败：" + (err && err.message ? err.message : err);
+    document.body.innerHTML="";
+    document.body.appendChild(box);
+  }
+}
+
+function init(){
+  const __viewerParams = new URLSearchParams(location.search);
+  if(__viewerParams.get("data_url")){ initViewerMode(__viewerParams); return; }
+  // 点进数字框即全选原内容，直接输入即可替换
+  document.addEventListener('focusin', e=>{
+    const el = e.target;
+    if(el && el.tagName === 'INPUT' && el.type === 'number'){
+      try{ el.select(); }catch(_){}
+    }
+  });
+  document.addEventListener('click', e=>{
+    const el = e.target;
+    if(el && el.tagName === 'INPUT' && el.type === 'number'){
+      setTimeout(()=>{ try{ el.select(); }catch(_){} }, 0);
+    }
+  });
+  addAttackRow();
+  addFeatRow();
+  addFeatureRow();
+  addPoolRow();
+  addGearRow();
+  addScrollRow();
+  renderLevels();
+  try{
+    const saved = localStorage.getItem(PORTRAIT_KEY);
+    if(saved) applyPortrait(saved);
+  }catch{}
+  // 先恢复上次手动保存的内容，再渲染
+  restoreLocalSave();
+  render();
+}
+
+window.onload = init;
+
+// 技能收藏 / 临时值：事件委托，只绑定一次，避免重复渲染导致重复触发
+function bindSkillInteractions(){
+  const sec = document.getElementById('sec-skill-display');
+  if (!sec || sec.dataset.bound === '1') return;
+  sec.dataset.bound = '1';
+  const favKeyOf = () => 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'local');
+  const tempKeyOf = () => 'pf1e-skill-temp:' + (new URLSearchParams(location.search).get('data_url') || 'local');
+  const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || '{}') || {}; } catch(e) { return {}; } };
+  const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} };
+
+  sec.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('.fav-btn') : null;
+    if (!btn) return;
+    e.preventDefault();
+    const id = btn.dataset.skill;
+    const favKey = favKeyOf();
+    const favs = read(favKey);
+    if (!Object.keys(favs).length) {
+      sec.querySelectorAll('.fav-btn').forEach(b=>{ favs[b.dataset.skill] = b.classList.contains('on'); });
+    }
+    favs[id] = !favs[id];
+    write(favKey, favs);
+    btn.classList.toggle('on', !!favs[id]);
+    btn.textContent = favs[id] ? '★' : '☆';
+  });
+
+  sec.addEventListener('input', (e) => {
+    const inp = e.target;
+    if (!inp || !inp.classList || !inp.classList.contains('skill-temp')) return;
+    const id = inp.dataset.skill;
+    const cell = sec.querySelector('.skill-total[data-skill="'+id+'"]');
+    if (!cell) return;
+    const base = parseInt(cell.dataset.base) || 0;
+    const temp = parseInt(inp.value) || 0;
+    const v = base + temp;
+    cell.textContent = (v >= 0 ? '+' : '') + v;
+    const store = read(tempKeyOf());
+    store[id] = inp.value === '' ? null : inp.value;
+    write(tempKeyOf(), store);
+  });
+}
+
+</script>
+
+<!-- 固定在右下角的视图切换按钮（在容器之外） -->
+<button id="viewFab" class="view-fab" onclick="toggleView()" title="切换 修改 / 展示">展示</button>
+
+</body>
+</html>

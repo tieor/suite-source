@@ -1,0 +1,25 @@
+Full Suite · PF1E — 修改说明 / NOTICE of modification
+
+本作品是 Full Suite 的修改版本。
+This work is a modified version of Full Suite.
+
+原作品 / Original work:
+  Full Suite — https://github.com/FullPeople/obr-suite
+  Copyright (c) 2026 FullPeople
+  License: GNU General Public License v3.0 (见 LICENSE / see LICENSE)
+
+修改者 / Modifier:
+  瑞依 (Ruiyi), 2026-11
+
+修改内容 / Changes:
+  - 角色卡改为 PF1E 规则：卡面、字段读写、导入导出、悬浮窗数据映射
+  - 移除 5E 角色卡导入与 5E 查看器
+  - 移除 三龙牌、世界包、QQ 卡库、支持者悬浮墙
+  - 移除公告的中英文切换与数据版本切换
+  - 新增 PF1E Wiki 搜索入口、速度/奔跑速度、法术施法信息、技能收藏
+  - 调整界面文案与公告
+
+本修改版本同样以 GNU GPL-3.0 发布；完整源码见：
+  https://github.com/tieor/suite-source
+
+GPL-3.0 不限制使用目的；本文件中的“个人改编”仅描述来源，不构成额外许可限制。

@@ -1,0 +1,2252 @@
+import OBR, { buildImage, buildLine, Item } from "@owlbear-rodeo/sdk";
+import { setPanelOpen } from "../../utils/panelObstacles";
+import {
+  PANEL_IDS,
+  getPanelOffset,
+  getPanelSize,
+  registerPanelBbox,
+  BC_PANEL_DRAG_END,
+  BC_PANEL_RESET,
+  type DragEndPayload,
+} from "../../utils/panelLayout";
+import {
+  PLUGIN_ID,
+  PORTAL_KEY,
+  CREATE_PREFS_KEY,
+  CreatePrefs,
+  PortalMeta,
+  resolvePortalEffect,
+} from "./types";
+import { prefersReducedMotion } from "../transitions/protocol";
+import { needsPortalIconMigration, migratePortalIconDraft, applyPortalImage, isPortalImage } from "./appearance";
+import { resolveDefaultPortalImage } from "./default-image";
+// NOT `../../i18n`. This module is on background.ts's boot path, and
+// that file is one ~600-key object literal indexed dynamically, so
+// importing it for three strings put all 46 kB of it in front of every
+// client's startup. See i18n-portal.ts.
+import { PORTAL_I18N } from "../../i18n-portal";
+import { getLocalLang, getState } from "../../state";
+import { assetUrl } from "../../asset-base";
+import {
+  WallGrid,
+  landingCellSize,
+  distancePointToSegment,
+  type Point,
+  type WallSegment,
+} from "./landing";
+
+const _lang = () => getLocalLang();
+// Same shape as i18n.ts's `t`, including the `?? key` fallback — do not
+// simplify it to a bare index, or an unexpected language would throw
+// where the original returned the key.
+const _t = (k: keyof typeof PORTAL_I18N) => PORTAL_I18N[k]?.[_lang()] ?? k;
+
+// Portal module — DM draws a circle with the tool, the area becomes a
+// teleport trigger zone marked by an SVG icon at its center. Tokens dragged
+// into a visible portal trigger a destination prompt: pick another portal
+// with the same `tag`, all selected tokens teleport there in a hex spiral.
+//
+// Hidden portals (`visible=false`) are out-only — DM sees them translucent,
+// players can't see them, and the entry detector skips them, but their
+// names still appear in destination lists.
+
+const TOOL_ID = `${PLUGIN_ID}/tool`;
+const TOOL_MODE_ID = `${PLUGIN_ID}/mode`;
+const TOOL_PAIR_MODE_ID = `${PLUGIN_ID}/pair-mode`;
+const PREVIEW_ID = `${PLUGIN_ID}/draw-preview`;
+
+const EDIT_POPOVER_ID = `${PLUGIN_ID}/edit-popover`;
+const EDIT_URL = assetUrl("portal-edit.html");
+const EDIT_W = 380;
+const EDIT_H = 540;
+const EDIT_TOP_OFFSET = 60;
+
+// Asset URLs MUST be absolute — OBR resolves Item.image.url against
+// its own app origin, so a leading-slash path like "/suite-dev/x.svg"
+// turns into "https://www.owlbear.app/suite-dev/x.svg" and 404s.
+// `assetUrl` (src/asset-base.ts) builds an absolute URL from
+// location.origin + the build's BASE_URL so dev / stable installs
+// each load their own assets without bleeding into the other.
+
+const DEST_POPOVER_ID = `${PLUGIN_ID}/destination-popover`;
+const DEST_URL = assetUrl("portal-destination.html");
+
+const BLINK_MODAL_ID = `${PLUGIN_ID}/blink-modal`;
+const BLINK_URL = assetUrl("portal-blink.html");
+
+const ICON_URL = assetUrl("portal-icon.svg");
+const TOOL_ICON_URL = assetUrl("portal-tool-icon.svg");
+
+// Intrinsic SVG box. Visible glow fills this edge-to-edge so the
+// rendered diameter == 2 × trigger radius.
+const ICON_INTRINSIC = 64;
+// Default base size for OBR's image grid.dpi math — matches the SVG.
+const ICON_SIZE = ICON_INTRINSIC;
+const DEFAULT_RADIUS = 70;
+const MIN_RADIUS = 16; // ignore drags shorter than this (treated as click)
+const WALL_CLEARANCE_PADDING = 8;
+const WALL_SEARCH_EXTRA_RINGS = 10;
+const WALL_SEARCH_MAX_RINGS = 24;
+
+// The DM's scene/room switch gates effects on every receiving client.
+function readBlinkEnabled(): boolean {
+  return getState().portalEffects !== false;
+}
+
+// Broadcast channels (LOCAL only — single client lifecycle):
+const BROADCAST_TELEPORT = `${PLUGIN_ID}/teleport`;
+const BROADCAST_EDIT_SAVE = `${PLUGIN_ID}/edit-save`;
+const BROADCAST_EDIT_DELETE = `${PLUGIN_ID}/edit-delete`;
+const BROADCAST_EDIT_CLOSE = `${PLUGIN_ID}/edit-close`;
+const BROADCAST_DEST_CLOSED = `${PLUGIN_ID}/dest-modal-closed`;
+// Blink-effect handshake — see openBlinkAndTeleport() and portal-blink.html.
+const BROADCAST_BLINK_PROCEED = `${PLUGIN_ID}/blink-proceed`;
+const BROADCAST_BLINK_DONE = `${PLUGIN_ID}/blink-done`;
+
+const unsubs: Array<() => void> = [];
+let role: "GM" | "PLAYER" = "PLAYER";
+// Cached at setup (and refreshed on player change) so the items.onChange
+// hot path doesn't await OBR.player.getId() on every scene update.
+let myPlayerId = "";
+
+// --- Drag-to-draw state ---
+// `dragStart` is the user's first pointerdown — it becomes the CENTER
+// of the portal trigger zone. The drag distance from start to cursor
+// = the trigger radius. While dragging, a LIVE PREVIEW of the actual
+// SVG icon is rendered locally (OBR.scene.local) so the user sees the
+// final size grow in real-time. On drag-end the preview is removed
+// and the real portal is committed to scene metadata.
+let dragStart: { x: number; y: number } | null = null;
+let previewItemId: string | null = null;
+let pairFirst: { x: number; y: number } | null = null;
+let pairLinePreviewItemId: string | null = null;
+
+// --- Drag-end portal entry detection ---
+//
+// Strategy: when the local player's selected token's position changes,
+// start a debounce timer. If no further position change for the token
+// arrives within DRAG_END_MS, treat that as "drag end" and check if
+// the token now sits inside a (visible) portal. If yes, open the
+// destination modal.
+//
+// This replaces the earlier containment state machine which had two
+// nasty failure modes:
+//   1. Re-trigger immediately after a teleport (token lands inside the
+//      destination portal → state machine fires again).
+//   2. State got stuck "inside portal X" if selection changed mid-drag
+//      → no future entries could fire.
+// The drag-end approach has zero accumulated state per token; each
+// drag-end is evaluated fresh against the current world.
+// 2026-05-17 — reduced from 350 ms to 200 ms. Multi-fire position
+// updates during a held drag still get debounced, but the popover
+// now opens within ~200 ms of release instead of the 350 ms perceived
+// lag the user reported ("显示的非常延迟").
+const DRAG_END_MS = 200;
+let dragEndTimer: ReturnType<typeof setTimeout> | null = null;
+const lastTokenPos = new Map<string, { x: number; y: number }>();
+// Tokens just teleported by this client — their drag-end check is
+// suppressed for SUPPRESS_AFTER_TELEPORT_MS to swallow the
+// programmatic position change. Window is just long enough to cover
+// the post-update debounce (DRAG_END_MS + a buffer); legitimate user
+// drags landing AFTER the window fire normally.
+const SUPPRESS_AFTER_TELEPORT_MS = 700;
+const recentlyTeleported = new Map<string, number>();
+let destPopoverOpen = false;
+let destPopoverSafetyTimer: ReturnType<typeof setTimeout> | null = null;
+// Blink modal stays attached to the dest-popover lifecycle: when the
+// modal is up we behave like the popover is up (no new portal entries
+// fire) so a teleport in flight can't be interrupted by another drag.
+let blinkModalOpen = false;
+let portalEffectEpoch = 0;
+let portalEffectController: AbortController | null = null;
+// Payload latched at destination-pick time. The blink modal asks for
+// it via BROADCAST_BLINK_PROCEED at the apex of the close animation.
+let pendingTeleport: { destPortalId: string; tokenIds: string[]; entryId?: string } | null = null;
+// 2026-05-12 — second job kind: "blink + focus camera ONLY" (no token
+// move). Used by the initiative tracker's "集结角色到此处" feature so
+// every client gets the same blink + viewport snap that a portal
+// teleport gives. Mutually exclusive with `pendingTeleport`; the
+// proceed handler picks whichever is set.
+let pendingFocus: { x: number; y: number } | null = null;
+// 2026-05-14 — third job kind: "blink + move tokens with fog bypass +
+// focus camera". The DM uses this for the initiative gather so the
+// position update happens AT eyelid apex (same as portal teleport).
+// Remote players just receive a `blink-and-focus` (camera-only) — the
+// DM's updateItems syncs the positions to them during their blink.
+let pendingGather: {
+  tokenIds: string[];
+  positions: { x: number; y: number }[];
+  center: { x: number; y: number };
+} | null = null;
+// Cross-client broadcast for "open blink modal + focus camera at (x, y)".
+// Receivers use the shared effect gate but still receive camera focus.
+const BROADCAST_BLINK_AND_FOCUS = `${PLUGIN_ID}/blink-and-focus`;
+export const PORTALS_BC_BLINK_AND_FOCUS = BROADCAST_BLINK_AND_FOCUS;
+
+// --- DM auto-edit-popover when single portal selected ---
+let editPopoverOpen = false;
+let currentEditId: string | null = null;
+let portalEditorActive = false, portalEditorReady = false, portalEditorAuthority = 0;
+let editorConnectionId = "";
+let editRequestRevision = 0, editSelectionRevision = 0;
+type EditRequest = { id: string; isNew: boolean; epoch: number; authority: number; revision: number; reanchor: boolean; instance: string };
+let desiredEdit: EditRequest | null = null, openedEditEpoch = -1, openedEditAuthority = -1;
+let currentEditInstance = "";
+let editQueue: Promise<void> | null = null, editRequested = false;
+function editorAllowed(epoch: number, authority: number): boolean {
+  return portalEditorActive && portalEditorReady && role === "GM" && epoch === portalEffectEpoch && authority === portalEditorAuthority;
+}
+function currentEditRequest(request: EditRequest): boolean {
+  return desiredEdit === request && request.revision === editRequestRevision && editorAllowed(request.epoch, request.authority);
+}
+// Skip the auto-popover the first time selection becomes the portal we
+// just created — the post-draw flow opens the popover explicitly with
+// isNew=1 and we don't want it racing with the selection-watcher.
+let suppressAutoEditOnce: string | null = null;
+
+function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function isPortal(it: Item): boolean {
+  return !!it.metadata[PORTAL_KEY];
+}
+
+function readPortalMeta(it: Item): PortalMeta | null {
+  const m = it.metadata[PORTAL_KEY];
+  if (!m || typeof m !== "object") return null;
+  const mm = m as any;
+  if (typeof mm.tag !== "string") return null;
+  return {
+    name: typeof mm.name === "string" ? mm.name : "",
+    tag: mm.tag,
+    radius: typeof mm.radius === "number" && mm.radius > 0 ? mm.radius : DEFAULT_RADIUS,
+  };
+}
+
+// The portal item's `position` is the world coord where the image's
+// `offset` point lands. We always set offset to image-center, so
+// `position` IS the geometric center of the visible icon — same
+// pattern OBR's bestiary spawn uses.
+function portalCenter(it: Item): { x: number; y: number } {
+  return { x: it.position.x, y: it.position.y };
+}
+
+// --- Live preview (local-only, scales with the drag) ---------------------
+
+async function startPreview(center: { x: number; y: number }, radius: number = MIN_RADIUS) {
+  try {
+    let sceneDpi = 150;
+    try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+    const half = ICON_SIZE / 2;
+    // Start at scale = MIN_RADIUS so the preview is visible from the
+    // very first move event instead of popping in at frame 2.
+    const s = (2 * Math.max(MIN_RADIUS, radius)) / sceneDpi;
+    const img = buildImage(
+      {
+        width: ICON_SIZE,
+        height: ICON_SIZE,
+        url: ICON_URL,
+        mime: "image/svg+xml",
+      },
+      { dpi: ICON_SIZE, offset: { x: half, y: half } }
+    )
+      .position(center)
+      .scale({ x: s, y: s })
+      .layer("DRAWING")
+      .locked(true)
+      .disableHit(true)
+      .visible(true)
+      .metadata({ [`${PLUGIN_ID}/preview`]: true })
+      .build();
+    await OBR.scene.local.addItems([img]);
+    previewItemId = img.id;
+  } catch (e) {
+    console.error("[obr-suite/portals] startPreview failed", e);
+  }
+}
+
+async function updatePreview(center: { x: number; y: number }, radius: number) {
+  if (!previewItemId) return;
+  try {
+    let sceneDpi = 150;
+    try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+    const s = (2 * radius) / sceneDpi;
+    await OBR.scene.local.updateItems([previewItemId], (drafts) => {
+      for (const d of drafts) {
+        d.position = { x: center.x, y: center.y };
+        d.scale = { x: s, y: s };
+      }
+    });
+  } catch {}
+}
+
+async function clearPreview() {
+  if (!previewItemId) return;
+  const id = previewItemId;
+  previewItemId = null;
+  try { await OBR.scene.local.deleteItems([id]); } catch {}
+}
+
+async function startPairLinePreview(from: { x: number; y: number }, to: { x: number; y: number }) {
+  await clearPairLinePreview();
+  try {
+    const line = buildLine()
+      .position({ x: 0, y: 0 })
+      .startPosition(from)
+      .endPosition(to)
+      .strokeColor("#58c7ff")
+      .strokeOpacity(0.9)
+      .strokeWidth(4)
+      .strokeDash([18, 12])
+      .layer("CONTROL")
+      .locked(true)
+      .disableHit(true)
+      .visible(true)
+      .metadata({ [`${PLUGIN_ID}/pair-line-preview`]: true })
+      .build();
+    await OBR.scene.local.addItems([line]);
+    pairLinePreviewItemId = line.id;
+  } catch (e) {
+    console.warn("[obr-suite/portals] startPairLinePreview failed", e);
+  }
+}
+
+async function updatePairLinePreview(to: { x: number; y: number }) {
+  const first = pairFirst;
+  if (!first) return;
+  if (!pairLinePreviewItemId) {
+    await startPairLinePreview(first, to);
+    return;
+  }
+  try {
+    await OBR.scene.local.updateItems([pairLinePreviewItemId], (drafts) => {
+      for (const d of drafts) {
+        const line = d as any;
+        line.position = { x: 0, y: 0 };
+        line.startPosition = { x: first.x, y: first.y };
+        line.endPosition = { x: to.x, y: to.y };
+        line.disableHit = true;
+        line.locked = true;
+      }
+    }, true);
+  } catch {}
+}
+
+async function clearPairLinePreview() {
+  if (!pairLinePreviewItemId) return;
+  const id = pairLinePreviewItemId;
+  pairLinePreviewItemId = null;
+  try { await OBR.scene.local.deleteItems([id]); } catch {}
+}
+
+async function clearPairPreview() {
+  await clearPreview();
+  await clearPairLinePreview();
+}
+
+// --- Create portal --------------------------------------------------------
+
+async function createPortal(center: { x: number; y: number }, radius: number) {
+  const epoch = portalEffectEpoch, authority = portalEditorAuthority;
+  if (!editorAllowed(epoch, authority)) return;
+  let prefs: CreatePrefs = {};
+  try {
+    const raw = localStorage.getItem(CREATE_PREFS_KEY);
+    if (raw) prefs = JSON.parse(raw) as CreatePrefs;
+  } catch {}
+  const showName = prefs.showName === true;
+  const visible = prefs.visible !== false;
+  const locked = prefs.locked === true;
+  const meta: PortalMeta = { name: "", tag: "", radius, showName, visible, locked };
+  // Same pattern as the bestiary's monster spawn (modules/bestiary/spawn.ts):
+  //   - dpi = ICON_SIZE → with scale=1 the icon renders at exactly 1 cell.
+  //   - offset = image-center → OBR places the offset point at `position`,
+  //     so `position` IS the world-coord center of the visible icon.
+  //   - .scale() multiplies the displayed size LINEARLY around the offset
+  //     point, so radius doubling → diameter doubling (no geometric blow-up).
+  // The trigger zone is invisible — only the SVG renders. Setting
+  // `locked(false)` + no `disableHit` keeps the item selectable and
+  // deletable via OBR's built-in handles.
+  let sceneDpi = 150;
+  try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+  if (!editorAllowed(epoch, authority)) return;
+  const half = ICON_SIZE / 2;
+  // Linear scale: visible diameter = 2 × radius scene-pixels.
+  // Base render (scale=1) = 1 grid cell = sceneDpi scene-pixels.
+  const s = (2 * radius) / sceneDpi;
+  const img = buildImage(
+    {
+      width: ICON_SIZE,
+      height: ICON_SIZE,
+      url: ICON_URL,
+      mime: "image/svg+xml",
+    },
+    { dpi: ICON_SIZE, offset: { x: half, y: half } }
+  )
+    .position(center)
+    .scale({ x: s, y: s })
+    .name(_t("portalToolName"))
+    .layer("PROP")
+    .visible(visible)
+    .locked(locked)
+    .metadata({ [PORTAL_KEY]: meta })
+    .build();
+  applyPortalImage(img, await resolveDefaultPortalImage());
+  if (!editorAllowed(epoch, authority) || await OBR.player.getRole() !== "GM" || !editorAllowed(epoch, authority)) return;
+  await OBR.scene.items.addItems([img]);
+  // The scene can change while the host acknowledges an already-issued add.
+  // Do not reopen that old scene's editor (or set its selection suppression).
+  if (!editorAllowed(epoch, authority) || await OBR.player.getRole() !== "GM" || !editorAllowed(epoch, authority)) return;
+  suppressAutoEditOnce = img.id;
+  await openEditPopover(img.id, true);
+}
+
+function readCreatePrefs(): Required<Pick<CreatePrefs, "showName" | "visible" | "locked">> {
+  let prefs: CreatePrefs = {};
+  try {
+    const raw = localStorage.getItem(CREATE_PREFS_KEY);
+    if (raw) prefs = JSON.parse(raw) as CreatePrefs;
+  } catch {}
+  return {
+    showName: prefs.showName === true,
+    visible: prefs.visible !== false,
+    locked: prefs.locked === true,
+  };
+}
+
+async function buildStandardPortalItem(
+  center: { x: number; y: number },
+  tag: string,
+): Promise<Item> {
+  const prefs = readCreatePrefs();
+  const radius = DEFAULT_RADIUS;
+  const meta: PortalMeta = {
+    name: "",
+    tag,
+    radius,
+    showName: prefs.showName,
+    visible: prefs.visible,
+    locked: prefs.locked,
+  };
+  let sceneDpi = 150;
+  try { sceneDpi = await OBR.scene.grid.getDpi(); } catch {}
+  const half = ICON_SIZE / 2;
+  const s = (2 * radius) / sceneDpi;
+  return buildImage(
+    {
+      width: ICON_SIZE,
+      height: ICON_SIZE,
+      url: ICON_URL,
+      mime: "image/svg+xml",
+    },
+    { dpi: ICON_SIZE, offset: { x: half, y: half } }
+  )
+    .position(center)
+    .scale({ x: s, y: s })
+    .name(_t("portalToolName"))
+    .layer("PROP")
+    .visible(prefs.visible)
+    .locked(prefs.locked)
+    .metadata({ [PORTAL_KEY]: meta })
+    .build();
+}
+
+function randomPortalCode(): string {
+  try {
+    const bytes = new Uint8Array(4);
+    globalThis.crypto?.getRandomValues(bytes);
+    if (bytes.some((b) => b !== 0)) {
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    }
+  } catch {}
+  return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0").toUpperCase();
+}
+
+async function createUniquePairTag(): Promise<string> {
+  const used = new Set<string>();
+  try {
+    const portals = await OBR.scene.items.getItems(isPortal);
+    for (const p of portals) {
+      const meta = readPortalMeta(p);
+      if (meta?.tag) used.add(meta.tag);
+    }
+  } catch {}
+  for (let i = 0; i < 12; i++) {
+    const tag = `P-${randomPortalCode()}`;
+    if (!used.has(tag)) return tag;
+  }
+  return `P-${Date.now().toString(36).toUpperCase()}`;
+}
+
+async function createLinkedPortalPair(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): Promise<void> {
+  const epoch = portalEffectEpoch;
+  const tag = await createUniquePairTag();
+  const artwork = await resolveDefaultPortalImage();
+  const portals = await Promise.all([
+    buildStandardPortalItem(a, tag),
+    buildStandardPortalItem(b, tag),
+  ]);
+  for (const portal of portals) if (isPortalImage(portal)) applyPortalImage(portal, artwork);
+  if (epoch !== portalEffectEpoch || await OBR.player.getRole() !== "GM" || epoch !== portalEffectEpoch) return;
+  await OBR.scene.items.addItems(portals);
+}
+
+// --- Edit popover ---------------------------------------------------------
+
+// Portal-edit popover bbox — CENTER/TOP anchor. Always returns the
+// expected bbox so the layout editor can pre-arrange the popover even
+// before any portal is being edited.
+registerPanelBbox(PANEL_IDS.portalEdit, async () => {
+  try {
+    const vw = await OBR.viewport.getWidth();
+    const userOff = getPanelOffset(PANEL_IDS.portalEdit);
+    const sizeOverride = getPanelSize(PANEL_IDS.portalEdit);
+    const w = sizeOverride?.width ?? EDIT_W;
+    const h = sizeOverride?.height ?? EDIT_H;
+    const anchorX = Math.round(vw / 2) + userOff.dx;
+    const anchorY = EDIT_TOP_OFFSET + userOff.dy;
+    return {
+      left: anchorX - w / 2,
+      top: anchorY,
+      width: w,
+      height: h,
+    };
+  } catch { return null; }
+});
+
+async function openEditPopover(portalId: string, isNew: boolean, reanchor = false) {
+  const epoch = portalEffectEpoch, authority = portalEditorAuthority;
+  if (!editorAllowed(epoch, authority)) return;
+  ++editSelectionRevision;
+  if (!reanchor && desiredEdit?.id === portalId && currentEditRequest(desiredEdit)) return syncEditPopover();
+  desiredEdit = { id: portalId, isNew, epoch, authority, revision: ++editRequestRevision, reanchor, instance: crypto.randomUUID() };
+  await syncEditPopover();
+}
+
+async function closeEditPopover() {
+  ++editSelectionRevision; ++editRequestRevision; desiredEdit = null;
+  await syncEditPopover();
+}
+
+/** One host popover ID, one in-flight operation. A stale open is closed before
+ * the next scene's editor opens; a late close never erases the latest intent. */
+function syncEditPopover(): Promise<void> {
+  editRequested = true;
+  if (editQueue) return editQueue;
+  editQueue = (async () => {
+    // This raw close deliberately never queues itself or changes desiredEdit.
+    const closeActual = async () => {
+      if (!editPopoverOpen) return;
+      await OBR.popover.close(EDIT_POPOVER_ID);
+      editPopoverOpen = false; currentEditId = null;
+      currentEditInstance = "";
+      openedEditEpoch = openedEditAuthority = -1;
+      setPanelOpen("portal-edit", false);
+    };
+    while (true) {
+      editRequested = false;
+      const request = desiredEdit;
+      if (!request || !currentEditRequest(request)) {
+        if (desiredEdit === request) desiredEdit = null;
+        await closeActual();
+        if (desiredEdit) continue;
+        return;
+      }
+      const sameTarget = editPopoverOpen && currentEditId === request.id && currentEditInstance === request.instance && openedEditEpoch === request.epoch && openedEditAuthority === request.authority;
+      if (sameTarget && !request.reanchor) return;
+      if (editPopoverOpen && !sameTarget) {
+        await closeActual();
+        if (!currentEditRequest(request)) continue;
+      }
+      const vw = await OBR.viewport.getWidth();
+      if (!currentEditRequest(request)) continue;
+      const freshRole = await OBR.player.getRole();
+      if (!currentEditRequest(request)) continue;
+      if (freshRole !== "GM") { desiredEdit = null; continue; }
+      const userOff = getPanelOffset(PANEL_IDS.portalEdit);
+      const sizeOverride = getPanelSize(PANEL_IDS.portalEdit);
+      await OBR.popover.open({
+        id: EDIT_POPOVER_ID,
+        url: `${EDIT_URL}?id=${encodeURIComponent(request.id)}&instance=${encodeURIComponent(request.instance)}${request.isNew ? "&isNew=1" : ""}`,
+        width: sizeOverride?.width ?? EDIT_W,
+        height: sizeOverride?.height ?? EDIT_H,
+        anchorReference: "POSITION",
+        anchorPosition: { left: Math.round(vw / 2) + userOff.dx, top: EDIT_TOP_OFFSET + userOff.dy },
+        anchorOrigin: { horizontal: "CENTER", vertical: "TOP" },
+        transformOrigin: { horizontal: "CENTER", vertical: "TOP" },
+        hidePaper: true,
+        disableClickAway: true,
+      });
+      // Record what actually opened even if its ACK is stale. The next loop
+      // removes it before fulfilling the latest request, including teardown.
+      editPopoverOpen = true; currentEditId = request.id;
+      currentEditInstance = request.instance;
+      openedEditEpoch = request.epoch; openedEditAuthority = request.authority;
+      setPanelOpen("portal-edit", true);
+      if (currentEditRequest(request)) request.reanchor = false;
+    }
+  })().catch(e => {
+    console.error("[obr-suite/portals] editor operation failed", e);
+    void OBR.notification.show(_lang() === "en" ? "Could not update the portal editor. Please try again." : "传送门编辑窗口操作失败，请重试。", "ERROR").catch(() => {});
+  }).finally(() => {
+    editQueue = null;
+    if (editRequested) void syncEditPopover();
+  });
+  return editQueue;
+}
+
+async function handleEditClose(msg: { connectionId: string; data: unknown }): Promise<void> {
+  const data = msg.data as { id?: unknown; instance?: unknown } | undefined;
+  if (!editorConnectionId || msg.connectionId !== editorConnectionId || !data) return;
+  const desiredMatches = desiredEdit && currentEditRequest(desiredEdit) && data.id === desiredEdit.id && data.instance === desiredEdit.instance;
+  // A failed close retains the actual old window; permit its own retry only
+  // while no newer request owns this ID. Never accept an old iframe's close.
+  const retryMatches = !desiredEdit && editPopoverOpen && data.id === currentEditId && data.instance === currentEditInstance;
+  if (!desiredMatches && !retryMatches) return;
+  await closeEditPopover();
+}
+
+async function reanchorEditPopover(): Promise<void> {
+  // An old physical iframe can remain while its close ACK is pending. Layout
+  // events must follow the latest valid target, never revive that stale ID.
+  if (!editPopoverOpen || !desiredEdit || !currentEditRequest(desiredEdit)) return;
+  await openEditPopover(desiredEdit.id, false, true);
+}
+
+// --- DM selection watcher → auto edit popover -----------------------------
+
+async function handleDMSelectionForEdit(selection: string[] | undefined) {
+  const selectionRequest = ++editSelectionRevision, epoch = portalEffectEpoch, authority = portalEditorAuthority;
+  if (!editorAllowed(epoch, authority)) return;
+  if (!selection || selection.length !== 1) {
+    await closeEditPopover();
+    return;
+  }
+  const id = selection[0];
+  if (desiredEdit && desiredEdit.id !== id) {
+    desiredEdit = null; ++editRequestRevision;
+    void syncEditPopover();
+  }
+  if (suppressAutoEditOnce === id) {
+    // The post-draw open already handled this id once.
+    suppressAutoEditOnce = null;
+    return;
+  }
+  let portalItem: Item | null = null;
+  try {
+    const items = await OBR.scene.items.getItems([id]);
+    if (selectionRequest !== editSelectionRevision || !editorAllowed(epoch, authority)) return;
+    if (items.length > 0 && isPortal(items[0])) portalItem = items[0];
+  } catch {}
+  if (selectionRequest !== editSelectionRevision || !editorAllowed(epoch, authority)) return;
+  if (!portalItem) {
+    await closeEditPopover();
+    return;
+  }
+  await openEditPopover(portalItem.id, false);
+}
+
+// --- Drag-end portal entry detection --------------------------------------
+
+// === Drag-end portal entry detection ===
+//
+// Attribution is via `Item.lastModifiedUserId` — OBR sets this to
+// the player who initiated the change (drag, metadata write, etc.).
+// The reference plugin (gitlab.com/resident-uhlig/owlbear-rodeo-portals)
+// uses the same approach and it's the only RELIABLE way to answer
+// "did I just move this?" — neither selection nor createdUserId
+// works:
+//   • selection updates timing-race with item changes; sometimes
+//     the new selection isn't reflected when items.onChange fires
+//   • createdUserId tells you the OWNER, not the MOVER. DM has
+//     write permission for player-owned tokens, so DM can drag
+//     them — yet createdUserId stays as the player, mis-attributing
+//     the move to whoever happens to own the token.
+// `lastModifiedUserId` is the canonical OBR signal: whoever just
+// wrote position is whoever should fire portal logic.
+//
+// Group teleport: when the user explicitly selects a party of N and
+// drags ONE into the portal, all N should teleport. Group =
+// (tokens I just moved) ∪ (current selection that's a CHARACTER /
+// MOUNT). OBR's permission layer drops any token in the group that
+// the dragger doesn't have write access to during the actual
+// teleport's updateItems call.
+
+const movedByMeIds = new Set<string>();
+
+// Bumped every time onItemsMaybeDragging processes an onChange. A
+// rebuild whose getItems resolves AFTER a live onChange has been
+// processed must not clobber the fresher state (clearing lastTokenPos
+// and cancelling dragEndTimer would swallow a drag that started right
+// after scene-ready — the exact first-drag bug class of checklist §3).
+let dragStateGeneration = 0;
+
+/** Seed lastTokenPos with the current position of EVERY movable
+ *  CHARACTER/MOUNT token. Run at scene start (setup + onReadyChange)
+ *  so the very first drag has a baseline to diff against — the drag
+ *  itself often arrives as a single batched items.onChange carrying
+ *  only the final position, and the old selection-watcher seeding
+ *  raced that event (checklist §3). */
+async function rebuildDragBaseline(reason: string): Promise<void> {
+  const genAtStart = dragStateGeneration;
+  let items: Item[];
+  try {
+    items = await OBR.scene.items.getItems();
+  } catch (e) {
+    console.error("[obr-suite/portals] drag baseline rebuild failed", { reason, error: e });
+    return;
+  }
+  if (dragStateGeneration !== genAtStart) {
+    // A live onChange seeded fresher state (and possibly armed a drag
+    // debounce) while we awaited — merge instead of clobbering: fill
+    // only the gaps, touch nothing else.
+    for (const it of items) {
+      if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+      if (isPortal(it)) continue;
+      if (!lastTokenPos.has(it.id)) {
+        lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+      }
+    }
+    return;
+  }
+  lastTokenPos.clear();
+  movedByMeIds.clear();
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
+  for (const it of items) {
+    if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+    if (isPortal(it)) continue;
+    lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+  }
+}
+
+async function onItemsMaybeDragging(items: Item[]) {
+  dragStateGeneration++;
+  const myId = myPlayerId;
+  if (!myId) return;
+
+  let didMove = false;
+  const liveMovableIds = new Set<string>();
+  for (const it of items) {
+    if (it.layer !== "CHARACTER" && it.layer !== "MOUNT") continue;
+    if (isPortal(it)) continue;
+    liveMovableIds.add(it.id);
+    // Only attribute moves where THIS client is the last writer.
+    // Other clients see the change but didn't initiate it.
+    if ((it as any).lastModifiedUserId !== myId) {
+      // Still update lastTokenPos so a subsequent move-by-me can
+      // correctly diff against the latest known position.
+      lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+      continue;
+    }
+    const prev = lastTokenPos.get(it.id);
+    if (prev && (prev.x !== it.position.x || prev.y !== it.position.y)) {
+      movedByMeIds.add(it.id);
+      didMove = true;
+    }
+    lastTokenPos.set(it.id, { x: it.position.x, y: it.position.y });
+  }
+  // lastTokenPos is maintained as a FULL scene snapshot (onChange
+  // delivers the complete item list): prune only tokens that left the
+  // scene. The old per-selection prune destroyed baselines every time
+  // the selection changed, which was one of the first-drag bugs.
+  for (const id of lastTokenPos.keys()) {
+    if (!liveMovableIds.has(id)) lastTokenPos.delete(id);
+  }
+
+  if (!didMove) return;
+  // Any genuine drag dismisses the destination popover so the user
+  // isn't stuck with a stale bubble blocking re-trigger. Closing is
+  // idempotent — a popover already closed is a no-op.
+  if (destPopoverOpen) {
+    void closeDestinationPopover();
+  }
+  if (dragEndTimer) clearTimeout(dragEndTimer);
+  dragEndTimer = setTimeout(() => {
+    dragEndTimer = null;
+    onDragEnd().catch((e) => console.error("[obr-suite/portals] onDragEnd failed", e));
+  }, DRAG_END_MS);
+}
+
+async function onDragEnd() {
+  // Always drain movedByMeIds — even if we early-return below — so
+  // accumulating IDs from a drag-during-modal session can't leak into
+  // the next teleport's tokenIds. Ditto for clearing the per-token
+  // last-position cache for entries we won't act on.
+  const movedNow = new Set(movedByMeIds);
+  movedByMeIds.clear();
+  if (destPopoverOpen || blinkModalOpen) return;
+  if (movedNow.size === 0) return;
+
+  let items: Item[];
+  try {
+    items = await OBR.scene.items.getItems();
+  } catch (e) {
+    console.error("[obr-suite/portals] drag-end getItems failed", { movedIds: [...movedNow], error: e });
+    return;
+  }
+
+  const portals = items.filter(isPortal);
+  if (portals.length === 0) return;
+  const visiblePortals = portals.filter((p) => p.visible);
+  if (visiblePortals.length === 0) return;
+
+  const now = Date.now();
+  for (const [id, t] of recentlyTeleported) {
+    if (now - t > SUPPRESS_AFTER_TELEPORT_MS) recentlyTeleported.delete(id);
+  }
+
+  // Group-teleport candidates: tokens this client moved AND that
+  // are in the player's current selection. The intersection is what
+  // the user actually "grabbed":
+  //   • movedNow alone over-fires — OBR auto-moves attached items
+  //     (Stat Bubbles, S&S vision sources, follower tokens, anything
+  //     with `attachedTo` + default POSITION inheritance) when the
+  //     parent drags. Those attached items get added to movedByMeIds
+  //     even though the user never selected them.
+  //   • selection alone misses moved items that aren't in selection
+  //     (e.g. an unselected token shoved by collision).
+  //   • The intersection captures "the user explicitly grabbed these
+  //     and they actually moved" — this is the tokenIds payload the
+  //     popover shows the user.
+  // Empty-selection fallback: if the player has no selection at all
+  // at drag-end (rare — drag usually implies selection), accept all
+  // moved tokens so the feature still fires.
+  let selection: string[] = [];
+  try { const s = await OBR.player.getSelection(); selection = s ?? []; } catch {}
+  const selSet = new Set(selection);
+  const groupCandidates = new Set<string>();
+  for (const id of movedNow) {
+    if (selSet.size === 0 || selSet.has(id)) groupCandidates.add(id);
+  }
+  if (groupCandidates.size === 0) return;
+
+  // Trigger geometry: token center must enter the portal's visible
+  // glow. Scale + offset math in createPortal() makes the rendered
+  // image diameter = 2×pm.radius scene-units, so pm.radius is the
+  // visible boundary radius. Earlier versions added the token's
+  // image-bounds radius to extend the trigger; that turned out
+  // to over-fire — token PNGs typically have transparent padding,
+  // so the real visible character lives well inside the bounding
+  // box, and the trigger radius would grow by 30-50% of the visible
+  // mismatch. Using just pm.radius makes the trigger == the visible
+  // ring, predictable for both DM and players.
+  for (const tok of items) {
+    if (!groupCandidates.has(tok.id)) continue;
+    if (tok.layer !== "CHARACTER" && tok.layer !== "MOUNT") continue;
+    if (isPortal(tok)) continue;
+    if (recentlyTeleported.has(tok.id)) continue;
+    for (const p of visiblePortals) {
+      const pm = readPortalMeta(p);
+      if (!pm) continue;
+      const d = dist(tok.position, portalCenter(p));
+      if (d <= pm.radius) {
+        await openDestinationPopover(p, items, [...groupCandidates]);
+        return;
+      }
+    }
+  }
+}
+
+// --- Destination popover --------------------------------------------------
+//
+// Renders a small transparent bubble ABOVE the entered portal. The
+// popover is anchored in screen-space (anchorReference: "POSITION"),
+// so the user can still pan / click / drag elsewhere on the canvas
+// while it's up. `disableClickAway: true` is REQUIRED so OBR doesn't
+// insert its viewport-wide click-catcher overlay (the user reported
+// the modal version blocked all canvas interaction). The popover is
+// dismissed via its own × button, picking a destination, or pressing
+// Esc inside it.
+
+async function openDestinationPopover(
+  entryPortal: Item,
+  allItems: Item[],
+  selectedTokenIds: string[]
+) {
+  if (destPopoverOpen || blinkModalOpen) return;
+  const entryMeta = readPortalMeta(entryPortal);
+  if (!entryMeta) return;
+
+  const candidates = allItems
+    .filter(isPortal)
+    .filter((p) => p.id !== entryPortal.id)
+    .map((p) => {
+      const m = readPortalMeta(p);
+      if (!m) return null;
+      if (m.tag !== entryMeta.tag) return null;
+      return {
+        id: p.id,
+        name: m.name || _t("portalUnnamed"),
+        tag: m.tag,
+        hidden: !p.visible,
+      };
+    })
+    .filter(Boolean) as Array<{ id: string; name: string; tag: string; hidden: boolean }>;
+
+  if (candidates.length === 0) return; // No destinations — silent
+
+  // Filter token ids to only the moveable ones (CHARACTER/MOUNT)
+  const tokenIds = allItems
+    .filter(
+      (i) =>
+        selectedTokenIds.includes(i.id) &&
+        (i.layer === "CHARACTER" || i.layer === "MOUNT") &&
+        !isPortal(i)
+    )
+    .map((i) => i.id);
+  if (tokenIds.length === 0) return;
+
+  // Anchor: bottom-center of popover sits a few px above the portal's
+  // visual top edge. Compute screen-space portal radius so the gap is
+  // consistent regardless of zoom.
+  const center = portalCenter(entryPortal);
+  let screenX = 0;
+  let screenY = 0;
+  let portalScreenRadius = 32;
+  try {
+    const screen = await OBR.viewport.transformPoint(center);
+    screenX = screen.x;
+    screenY = screen.y;
+    const vScale = await OBR.viewport.getScale();
+    portalScreenRadius = entryMeta.radius * vScale;
+  } catch {}
+
+  // Clamp so the popover never lands outside the OBR viewport.
+  let vw = 1280, vh = 720;
+  try {
+    [vw, vh] = await Promise.all([OBR.viewport.getWidth(), OBR.viewport.getHeight()]);
+  } catch {}
+
+  const POPOVER_W = 240;
+  // Initial height — generous so the iframe's first paint never clips.
+  // The destination iframe self-resizes via OBR.popover.setHeight() once
+  // it has rendered, so we don't need a tight fit here. ITEM_H/BASE used
+  // to be a static formula that undershot 1-/2-option layouts; the
+  // measure-and-resize-in-iframe path eliminates that class of bug
+  // entirely.
+  const ITEM_H = 36;
+  const BASE = 96;
+  const itemsForInitial = Math.min(Math.max(candidates.length, 1), 5);
+  const POPOVER_H = BASE + itemsForInitial * ITEM_H;
+
+  const GAP = 14;
+  let anchorTop = screenY - portalScreenRadius - GAP;
+  let placeBelow = false;
+  // If there isn't room above, flip below the portal.
+  if (anchorTop - POPOVER_H < 12) {
+    anchorTop = screenY + portalScreenRadius + GAP;
+    placeBelow = true;
+  }
+  let anchorLeft = screenX;
+  // Clamp the anchor's horizontal projection so the popover stays
+  // inside the viewport with a small margin.
+  const half = POPOVER_W / 2;
+  anchorLeft = Math.max(half + 8, Math.min(vw - half - 8, anchorLeft));
+
+  destPopoverOpen = true;
+  // 2026-05-17 — was 60 s. Reduced to 12 s because a 60 s lockout
+  // after any glitchy close-signal feels broken (user thinks the
+  // plugin is dead). 12 s is generous enough for a real teleport
+  // pick + blink animation (~3-4 s total) and still recovers fast
+  // if the destination popover orphans somehow.
+  if (destPopoverSafetyTimer) clearTimeout(destPopoverSafetyTimer);
+  destPopoverSafetyTimer = setTimeout(() => {
+    destPopoverOpen = false;
+    destPopoverSafetyTimer = null;
+  }, 12_000);
+
+  const payload = {
+    entryName: entryMeta.name || _t("portalUnnamed"),
+    entryTag: entryMeta.tag,
+    // Threaded through the popover → BROADCAST_TELEPORT → teleport()
+    // chain purely so failure logs can name the entry portal.
+    entryId: entryPortal.id,
+    candidates,
+    tokenIds,
+    placeBelow,
+  };
+  const url = `${DEST_URL}?p=${encodeURIComponent(JSON.stringify(payload))}`;
+  try {
+    await OBR.popover.open({
+      id: DEST_POPOVER_ID,
+      url,
+      width: POPOVER_W,
+      height: POPOVER_H,
+      anchorReference: "POSITION",
+      anchorPosition: { left: Math.round(anchorLeft), top: Math.round(anchorTop) },
+      anchorOrigin: { horizontal: "CENTER", vertical: placeBelow ? "TOP" : "BOTTOM" },
+      transformOrigin: { horizontal: "CENTER", vertical: placeBelow ? "TOP" : "BOTTOM" },
+      hidePaper: true,
+      // No viewport-wide click-catcher — keeps canvas interaction free.
+      disableClickAway: true,
+    });
+  } catch (e) {
+    console.error("[obr-suite/portals] openDestinationPopover failed", e);
+    destPopoverOpen = false;
+  }
+}
+
+async function closeDestinationPopover() {
+  try { await OBR.popover.close(DEST_POPOVER_ID); } catch {}
+  destPopoverOpen = false;
+  if (destPopoverSafetyTimer) {
+    clearTimeout(destPopoverSafetyTimer);
+    destPopoverSafetyTimer = null;
+  }
+}
+
+// --- Blink (eye-close → teleport → eye-open) ------------------------------
+//
+// Triggered when the destination popover sends BROADCAST_TELEPORT.
+// We open a fullscreen modal that paints two black "eyelid" bars
+// closing in the middle, perform the teleport while the eyes are
+// closed (camera moves instantly via setPosition during the closed
+// window so no visible canvas snap), then the modal opens the eyes
+// onto the destination and closes itself.
+async function openBlinkAndTeleport(destPortalId: string, tokenIds: string[], entryId?: string) {
+  if (blinkModalOpen) return;
+  pendingTeleport = { destPortalId, tokenIds, entryId };
+  blinkModalOpen = true;
+  try {
+    await OBR.modal.open({
+      id: BLINK_MODAL_ID,
+      url: BLINK_URL,
+      fullScreen: true,
+      hideBackdrop: true,
+      hidePaper: true,
+      // Block pointer events while the blink is in progress so the
+      // user can't drag during the teleport.
+      disablePointerEvents: false,
+    });
+  } catch (e) {
+    console.error("[obr-suite/portals] openBlinkAndTeleport failed", e);
+    blinkModalOpen = false;
+    pendingTeleport = null;
+    // Fall back to plain teleport so the user isn't stranded.
+    await teleport(destPortalId, tokenIds, false, entryId);
+  }
+}
+
+async function closeBlinkModal() {
+  try { await OBR.modal.close(BLINK_MODAL_ID); } catch {}
+  blinkModalOpen = false;
+}
+
+// 2026-05-12 — generic "blink + focus camera at this point" entry,
+// re-used by the initiative tracker's gather-here feature (broadcast
+// to every client so all players see the same cinematic when the DM
+// rallies the party).
+//
+// Honors LS_BLINK_KEY: blink-disabled clients skip the modal and
+// just smooth-pan the camera. Blink-enabled clients get the full
+// eyelid animation with an instant camera snap at the apex.
+// 2026-05-14 — DM-side entry for initiative gather. Opens the blink
+// modal locally, and at BLINK_PROCEED apex does:
+//   1. moveTokensWithFogBypass(tokenIds, positions)
+//   2. instant camera setPosition to center
+// Other players should receive a separate REMOTE blink-and-focus so
+// THEIR clients show the cinematic too — OBR scene-sync brings them
+// the new positions during their blink (they don't write items
+// themselves). Honors LS_BLINK_KEY: blink off → fog-bypass move +
+// smooth pan, no eyelid.
+//
+// Exported so the initiative module can call it directly without a
+// separate broadcast channel.
+export async function openBlinkAndGather(
+  tokenIds: string[],
+  positions: { x: number; y: number }[],
+  center: { x: number; y: number },
+): Promise<void> {
+  if (tokenIds.length === 0) return;
+  const blinkEnabled = readBlinkEnabled();
+  if (!blinkEnabled) {
+    // DM has blink disabled — still do the fog-bypass move (otherwise
+    // tokens with lights get rejected). Smooth-pan camera; no eyelid.
+    await moveTokensWithFogBypass(tokenIds, positions);
+    try {
+      const [vw, vh, vpScale] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+        OBR.viewport.getScale(),
+      ]);
+      const target = {
+        x: -center.x * vpScale + vw / 2,
+        y: -center.y * vpScale + vh / 2,
+      };
+      OBR.viewport.animateTo({ position: target, scale: vpScale }).catch(() => {});
+    } catch {}
+    return;
+  }
+  if (blinkModalOpen) return;
+  pendingGather = { tokenIds: [...tokenIds], positions: [...positions], center: { ...center } };
+  blinkModalOpen = true;
+  try {
+    await OBR.modal.open({
+      id: BLINK_MODAL_ID,
+      url: BLINK_URL,
+      fullScreen: true,
+      hideBackdrop: true,
+      hidePaper: true,
+      disablePointerEvents: false,
+    });
+  } catch (e) {
+    console.error("[obr-suite/portals] openBlinkAndGather failed", e);
+    blinkModalOpen = false;
+    pendingGather = null;
+    // Fall back to no-blink path so the DM still completes the gather.
+    await moveTokensWithFogBypass(tokenIds, positions);
+    try {
+      const [vw, vh, vpScale] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+        OBR.viewport.getScale(),
+      ]);
+      const target = {
+        x: -center.x * vpScale + vw / 2,
+        y: -center.y * vpScale + vh / 2,
+      };
+      OBR.viewport.animateTo({ position: target, scale: vpScale }).catch(() => {});
+    } catch {}
+  }
+}
+
+async function openBlinkAndFocus(center: { x: number; y: number }): Promise<void> {
+  const blinkEnabled = readBlinkEnabled();
+  if (!blinkEnabled) {
+    // Smooth pan — no modal. Same math as teleport()'s camera move.
+    try {
+      const [vw, vh, vpScale] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+        OBR.viewport.getScale(),
+      ]);
+      const target = {
+        x: -center.x * vpScale + vw / 2,
+        y: -center.y * vpScale + vh / 2,
+      };
+      OBR.viewport.animateTo({ position: target, scale: vpScale }).catch(() => {});
+    } catch {}
+    return;
+  }
+  if (blinkModalOpen) return;          // a teleport blink is already in flight
+  pendingFocus = { x: center.x, y: center.y };
+  blinkModalOpen = true;
+  try {
+    await OBR.modal.open({
+      id: BLINK_MODAL_ID,
+      url: BLINK_URL,
+      fullScreen: true,
+      hideBackdrop: true,
+      hidePaper: true,
+      disablePointerEvents: false,
+    });
+  } catch (e) {
+    console.error("[obr-suite/portals] openBlinkAndFocus open modal failed", e);
+    blinkModalOpen = false;
+    pendingFocus = null;
+  }
+}
+
+// --- Teleport: gather tokens around destination portal --------------------
+
+// Snapshotted token-side extension metadata so the post-teleport
+// restore knows the original values.
+// Map<tokenId, Record<metadataKey, originalValue>>.
+type ExtMetaSnapshot = Map<string, Record<string, any>>;
+
+// Detect token-side metadata entries that fog / line-of-sight / wall
+// extensions watch — these often reject "illegal" position updates
+// (token crosses a wall / leaves an allowed region), so we strip
+// them before teleporting and restore right after. Covers:
+//
+//   • OBR Dynamic Fog (`rodeo.owlbear.dynamic-fog/light` etc.) —
+//     keys whose value carries attenuationRadius / sourceRadius.
+//   • Smoke & Spectre walls — the SS extension keeps per-token state
+//     under the `rodeo.owlbear.codeo.smoke-and-spectre/...` namespace
+//     (and also exposes metadata keys with "smoke", "spectre" or
+//     "specter" in them). When the token has a vision range stored
+//     here, SS will validate any position change against its wall
+//     geometry and snap the token back if the segment crosses a
+//     wall — exactly what blocks our teleport. Stripping the
+//     metadata briefly bypasses the validator.
+//   • Anything else with `visionRange` / `lightRadius` / `wallBlocks`
+//     properties on the value — defensive catch-all for similar
+//     fog/wall plugins.
+//
+// Restoration is verbatim — we don't mutate the captured value, just
+// delete the key for the duration of the position update and set it
+// back to the exact same object after.
+function findExtensionPositionKeys(metadata: Record<string, unknown>): string[] {
+  const keys: string[] = [];
+  for (const [k, v] of Object.entries(metadata)) {
+    // KEY-based namespace check FIRST — must run before the value-
+    // type guard below, because Smoke & Spectre stores its per-token
+    // state as FLAT primitives (hasVision: boolean, visionRange:
+    // number, etc.), not nested objects. Round 7's "if not object,
+    // continue" was skipping every SS key.
+    //
+    // Confirmed SS keys (from user's DevTools dump):
+    //   com.battle-system.smoke/hasVision
+    //   com.battle-system.smoke/visionRange
+    //   com.battle-system.smoke/visionSourceRange
+    //   com.battle-system.smoke/visionFallOff
+    //   com.battle-system.smoke/visionInAngle
+    //   com.battle-system.smoke/visionOutAngle
+    //   com.battle-system.smoke/visionDark
+    // The "smoke" substring catches all of them. We also keep the
+    // looser "spectre" / "specter" checks in case a future SS build
+    // changes namespace.
+    const kl = k.toLowerCase();
+    if (
+      kl.includes("smoke") ||
+      kl.includes("spectre") ||
+      kl.includes("specter") ||
+      kl.includes("battle-system")  // SS's actual prefix
+    ) {
+      keys.push(k);
+      continue;
+    }
+    // Object-shape checks for plugins that nest their state.
+    if (!v || typeof v !== "object") continue;
+    const o = v as Record<string, unknown>;
+    // Dynamic Fog
+    if ("attenuationRadius" in o || "sourceRadius" in o) { keys.push(k); continue; }
+    // Generic vision / wall shape
+    if ("visionRange" in o || "lightRadius" in o || "wallBlocks" in o) { keys.push(k); continue; }
+  }
+  return keys;
+}
+
+async function snapshotExtensionMetadata(tokenIds: string[]): Promise<ExtMetaSnapshot> {
+  const snap: ExtMetaSnapshot = new Map();
+  try {
+    const items = await OBR.scene.items.getItems(tokenIds);
+    for (const it of items) {
+      const matchedKeys = findExtensionPositionKeys(it.metadata as Record<string, unknown>);
+      if (matchedKeys.length === 0) continue;
+      const captured: Record<string, any> = {};
+      for (const k of matchedKeys) captured[k] = (it.metadata as any)[k];
+      snap.set(it.id, captured);
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] snapshotExtensionMetadata failed", e);
+  }
+  return snap;
+}
+
+// 2026-05-14 — extracted from teleport(). Moves tokens to new positions
+// while bypassing fog/wall plugins (Dynamic Fog, Smoke & Spectre). Used
+// by both portal teleport AND initiative gather. Caller is responsible
+// for any camera animation — the helper only touches items.
+//
+// Phases (in order):
+//   1. Snapshot + strip extension metadata (fog/wall keys on token).
+//   1.5. Snapshot + hide attachments (scene + local).
+//   1.75. Snapshot + hide tokens themselves.
+//   2. updateItems(positions).
+//   2.25. Restore token visibility.
+//   2.5. Restore attachment visibility.
+//   3. Restore extension metadata.
+//
+// Also primes `recentlyTeleported` so the post-move scene.items.onChange
+// doesn't re-trigger the drag-end portal detector on the moved tokens.
+async function moveTokensWithFogBypass(
+  tokenIds: string[],
+  positions: { x: number; y: number }[],
+): Promise<void> {
+  if (tokenIds.length === 0) return;
+
+  // Mark tokens as "just moved" BEFORE any writes — see teleport()'s
+  // historical comment: the post-move scene.items.onChange will arm
+  // the drag-end debounce on every moved token, and without an
+  // up-front recentlyTeleported entry that debounce can fire ~350 ms
+  // later (before any guard is in place) and trigger the portal popup
+  // a second time on a token already sitting in a destination portal.
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
+  const stamp = Date.now();
+  for (const id of tokenIds) recentlyTeleported.set(id, stamp);
+
+  // Phase 1 — strip extension metadata that fog/wall plugins use to
+  // validate token movement. Covers Dynamic Fog (light sources) and
+  // Smoke & Spectre vision keys (com.battle-system.smoke/...). All
+  // captured values restored verbatim in Phase 3.
+  const extSnap = await snapshotExtensionMetadata(tokenIds);
+  if (extSnap.size > 0) {
+    try {
+      await OBR.scene.items.updateItems([...extSnap.keys()], (drafts) => {
+        for (const d of drafts) {
+          const captured = extSnap.get(d.id);
+          if (!captured) continue;
+          for (const k of Object.keys(captured)) delete (d.metadata as any)[k];
+        }
+      });
+    } catch (e) {
+      console.warn("[obr-suite/portals] strip extension metadata failed", e);
+    }
+  }
+
+  // Phase 1.5 — handle Smoke & Spectre's ATTACHMENT-based wall
+  // collision. Stripping the token's own SS metadata isn't enough
+  // for tokens with vision sources because SS attaches separate
+  // scene items (light cones / vision sources) to the token; those
+  // attachments collide with walls during the position update and
+  // SS snaps the whole group back. Toggling the attachments' visible
+  // flag bypasses SS's wall check; we restore exactly what we saw.
+  type AttSnap = Map<string, boolean>;
+  const attVisible: AttSnap = new Map();
+  let attachmentIds: string[] = [];
+  let localAttachmentIds: string[] = [];
+  try {
+    const attachments = await OBR.scene.items.getItemAttachments(tokenIds);
+    for (const a of attachments) {
+      attVisible.set(a.id, a.visible);
+      attachmentIds.push(a.id);
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] getItemAttachments failed", e);
+  }
+  try {
+    const localAttachments = await OBR.scene.local.getItemAttachments(tokenIds);
+    for (const a of localAttachments) {
+      attVisible.set(a.id, a.visible);
+      localAttachmentIds.push(a.id);
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] local.getItemAttachments failed", e);
+  }
+  try {
+    if (attachmentIds.length > 0) {
+      await OBR.scene.items.updateItems(attachmentIds, (drafts) => {
+        for (const d of drafts) d.visible = false;
+      });
+    }
+    if (localAttachmentIds.length > 0) {
+      await OBR.scene.local.updateItems(localAttachmentIds, (drafts) => {
+        for (const d of drafts) d.visible = false;
+      });
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] hide attachments failed", e);
+  }
+
+  // Phase 1.75 — hide the tokens themselves. User request 2026-05-12:
+  // "需要眼皮闭上时再进行隐藏且移动再显形" — during eyes-closed window,
+  // fully hide the token, move it, then reveal. The most robust way
+  // to bypass light/wall plugins that check the token's own collision
+  // with map geometry: an invisible token doesn't trigger those
+  // checks. Whole sequence runs WHILE THE BLINK OVERLAY IS UP so
+  // players never see the flash.
+  const tokenVisibleSnap = new Map<string, boolean>();
+  try {
+    const toks = await OBR.scene.items.getItems(tokenIds);
+    for (const t of toks) tokenVisibleSnap.set(t.id, t.visible);
+    if (toks.length > 0) {
+      await OBR.scene.items.updateItems(tokenIds, (drafts) => {
+        for (const d of drafts) d.visible = false;
+      });
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] hide tokens before move failed", e);
+  }
+
+  // Phase 2 — actual position update.
+  try {
+    await OBR.scene.items.updateItems(tokenIds, (drafts) => {
+      drafts.forEach((d, idx) => {
+        if (positions[idx]) d.position = positions[idx];
+      });
+    });
+  } catch (e) {
+    console.error("[obr-suite/portals] move updateItems failed", { tokenIds, positions, error: e });
+  }
+
+  // Phase 2.25 — restore token visibility verbatim.
+  if (tokenVisibleSnap.size > 0) {
+    try {
+      await OBR.scene.items.updateItems(tokenIds, (drafts) => {
+        for (const d of drafts) {
+          const v = tokenVisibleSnap.get(d.id);
+          if (typeof v === "boolean") d.visible = v;
+        }
+      });
+    } catch (e) {
+      console.warn("[obr-suite/portals] restore token visibility failed", e);
+    }
+  }
+
+  // Phase 2.5 — restore attachments' visible state.
+  try {
+    if (attachmentIds.length > 0) {
+      await OBR.scene.items.updateItems(attachmentIds, (drafts) => {
+        for (const d of drafts) {
+          const v = attVisible.get(d.id);
+          if (typeof v === "boolean") d.visible = v;
+        }
+      });
+    }
+    if (localAttachmentIds.length > 0) {
+      await OBR.scene.local.updateItems(localAttachmentIds, (drafts) => {
+        for (const d of drafts) {
+          const v = attVisible.get(d.id);
+          if (typeof v === "boolean") d.visible = v;
+        }
+      });
+    }
+  } catch (e) {
+    console.warn("[obr-suite/portals] restore attachments visibility failed", e);
+  }
+
+  // Phase 3 — restore extension metadata verbatim.
+  if (extSnap.size > 0) {
+    try {
+      await OBR.scene.items.updateItems([...extSnap.keys()], (drafts) => {
+        for (const d of drafts) {
+          const captured = extSnap.get(d.id);
+          if (!captured) continue;
+          for (const [key, original] of Object.entries(captured)) {
+            (d.metadata as any)[key] = original;
+          }
+        }
+      });
+    } catch (e) {
+      console.warn("[obr-suite/portals] restore extension metadata failed", e);
+    }
+  }
+
+  // Refresh suppress timestamp so onChange noise from Phase 3 writes
+  // is also suppressed. Belt-and-suspenders for the in-flight debounce.
+  const endStamp = Date.now();
+  for (const id of tokenIds) recentlyTeleported.set(id, endStamp);
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
+}
+
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** The item's transform, resolved once so it isn't re-derived per
+ *  point. Every field is constant for the whole wall. */
+function wallTransform(wall: Item): {
+  sx: number;
+  sy: number;
+  cos: number;
+  sin: number;
+  px: number;
+  py: number;
+} {
+  const w = wall as any;
+  const rotation = (finiteNumber(w.rotation, 0) * Math.PI) / 180;
+  return {
+    sx: finiteNumber(w.scale?.x, 1),
+    sy: finiteNumber(w.scale?.y, 1),
+    cos: Math.cos(rotation),
+    sin: Math.sin(rotation),
+    px: finiteNumber(w.position?.x, 0),
+    py: finiteNumber(w.position?.y, 0),
+  };
+}
+
+function applyWallTransform(
+  t: ReturnType<typeof wallTransform>,
+  point: Point,
+): Point {
+  const x = point.x * t.sx;
+  const y = point.y * t.sy;
+  return {
+    x: t.px + x * t.cos - y * t.sin,
+    y: t.py + x * t.sin + y * t.cos,
+  };
+}
+
+function isBlockingWallItem(item: Item): boolean {
+  const wall = item as any;
+  return (
+    wall?.type === "WALL" &&
+    wall.blocking !== false &&
+    Array.isArray(wall.points) &&
+    wall.points.length >= 2
+  );
+}
+
+function collectWallSegments(items: Item[]): WallSegment[] {
+  const segments: WallSegment[] = [];
+  for (const item of items) {
+    if (!isBlockingWallItem(item)) continue;
+    // Resolve the transform once per WALL, not once per point: the
+    // scale, rotation and position reads plus the cos/sin pair are
+    // identical for every point on the same item, and a traced map
+    // brings tens of thousands of points through here.
+    const t = wallTransform(item);
+    const points = ((item as any).points as Point[])
+      .filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y))
+      .map((p) => applyWallTransform(t, p));
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (dist(a, b) < 0.001) continue;
+      segments.push({ a, b });
+    }
+  }
+  return segments;
+}
+
+async function getBlockingWallSegments(sharedItems: Item[]): Promise<WallSegment[]> {
+  let localItems: Item[] = [];
+  try { localItems = await OBR.scene.local.getItems(); } catch {}
+  return collectWallSegments([...sharedItems, ...localItems]);
+}
+
+function readSourceRadius(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  const raw = (value as Record<string, unknown>).sourceRadius;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function tokenWallClearance(token: Item | undefined, dpi: number): number {
+  let sourceRadius = 0;
+  const metadata = (token?.metadata ?? {}) as Record<string, unknown>;
+  for (const value of Object.values(metadata)) {
+    sourceRadius = Math.max(sourceRadius, readSourceRadius(value));
+  }
+  return sourceRadius + Math.max(WALL_CLEARANCE_PADDING, dpi * 0.04);
+}
+
+function buildTeleportCandidates(center: Point, spacing: number, maxRing: number): Point[] {
+  const candidates: Point[] = [{ x: center.x, y: center.y }];
+  for (let ring = 1; ring <= maxRing; ring++) {
+    const count = ring * 6;
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
+      candidates.push({
+        x: center.x + Math.cos(angle) * spacing * ring,
+        y: center.y + Math.sin(angle) * spacing * ring,
+      });
+    }
+  }
+  return candidates;
+}
+
+function conflictsWithReserved(point: Point, reserved: Point[], spacing: number): boolean {
+  return reserved.some((other) => dist(other, point) < spacing * 0.5);
+}
+
+function findSafeTeleportPositions(
+  tokenIds: string[],
+  tokenById: Map<string, Item>,
+  occupants: Point[],
+  center: Point,
+  spacing: number,
+  dpi: number,
+  walls: WallSegment[],
+): Point[] | null {
+  const maxRing = Math.min(
+    WALL_SEARCH_MAX_RINGS,
+    Math.max(WALL_SEARCH_EXTRA_RINGS, Math.ceil(Math.sqrt(tokenIds.length + occupants.length + 1)) + WALL_SEARCH_EXTRA_RINGS),
+  );
+  const candidates = buildTeleportCandidates(center, spacing, maxRing);
+  // One grid for the whole search. Both safety tests are spatially
+  // bounded, so each candidate only has to look at nearby walls rather
+  // than all of them — 58 ms -> 12 ms for four tokens against a 5.5k
+  // segment map. See landing.ts for why the answer is identical.
+  const grid = new WallGrid(walls, landingCellSize(spacing));
+  const scratch: number[] = [];
+  const positions: Point[] = [];
+  for (const id of tokenIds) {
+    const clearance = tokenWallClearance(tokenById.get(id), dpi);
+    const reserved = [...occupants, ...positions];
+    const chosen = candidates.find((c) =>
+      !conflictsWithReserved(c, reserved, spacing) &&
+      grid.isSafeLandingPoint(c, center, clearance, scratch)
+    );
+    if (!chosen) return null;
+    positions.push({ x: chosen.x, y: chosen.y });
+  }
+  return positions;
+}
+
+async function notifyNoSafeLanding(): Promise<void> {
+  const msg = _lang() === "en"
+    ? "No safe portal landing point found near the destination."
+    : "目的地附近没有找到安全落点，已取消传送。";
+  try { await OBR.notification.show(msg, "WARNING"); } catch {}
+}
+
+async function teleport(
+  destPortalId: string,
+  tokenIds: string[],
+  instantCamera: boolean = false,
+  /** Entry portal id, threaded through the popover chain purely for
+   *  failure-log context. Optional — never blocks the teleport. */
+  entryId?: string,
+) {
+  if (tokenIds.length === 0) return;
+  let dest: Item | null = null;
+  try {
+    const fetched = await OBR.scene.items.getItems([destPortalId]);
+    if (fetched.length > 0) dest = fetched[0];
+  } catch (e) {
+    console.error("[obr-suite/portals] teleport failed: destination fetch error", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      tokenIds,
+      error: e,
+    });
+    // Return here — falling through to the !dest branch would log a
+    // second, FALSE cause ("portal missing" when it merely wasn't
+    // fetched) and mislead log triage.
+    return;
+  }
+  if (!dest) {
+    console.error("[obr-suite/portals] teleport failed: destination portal missing", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      tokenIds,
+    });
+    return;
+  }
+
+  let dpi = 150;
+  try { dpi = await OBR.scene.grid.getDpi(); } catch {}
+  const spacing = dpi;
+  const center = portalCenter(dest);
+
+  // Find tokens already sitting at the destination portal so we don't
+  // land on top of them. Anyone within the destination's trigger
+  // radius + 1 grid cell is "already there" and skipped during placement.
+  const destMeta = readPortalMeta(dest);
+  const destRadius = destMeta?.radius ?? spacing;
+  let occupants: Point[] = [];
+  let allItems: Item[] = [];
+  try {
+    allItems = await OBR.scene.items.getItems();
+    const teleSet = new Set(tokenIds);
+    occupants = allItems
+      .filter((it) =>
+        !teleSet.has(it.id) &&
+        (it.layer === "CHARACTER" || it.layer === "MOUNT") &&
+        !isPortal(it) &&
+        dist(it.position, center) <= destRadius + spacing,
+      )
+      .map((it) => ({ x: it.position.x, y: it.position.y }));
+  } catch {}
+
+  // Hex-ring spiral, filtered by existing occupants and Dynamic Fog
+  // walls. A candidate must be far enough from every blocking wall
+  // for the token's sourceRadius + padding, and must not sit across a
+  // wall from the destination portal center.
+  const tokenById = new Map<string, Item>();
+  for (const item of allItems) {
+    if (tokenIds.includes(item.id)) tokenById.set(item.id, item);
+  }
+  const wallSegments = await getBlockingWallSegments(allItems);
+  const positions = findSafeTeleportPositions(
+    tokenIds,
+    tokenById,
+    occupants,
+    center,
+    spacing,
+    dpi,
+    wallSegments,
+  );
+  if (!positions) {
+    console.error("[obr-suite/portals] teleport failed: no safe landing", {
+      entryId: entryId ?? "unknown",
+      destPortalId,
+      destCenter: center,
+      tokenIds,
+      tokenPositions: tokenIds.map((id) => {
+        const t = tokenById.get(id);
+        return { id, x: t?.position.x, y: t?.position.y };
+      }),
+      occupantCount: occupants.length,
+      wallSegmentCount: wallSegments.length,
+    });
+    await notifyNoSafeLanding();
+    return;
+  }
+
+  // The move (all phases 1-3 with fog/wall plugin bypass).
+  await moveTokensWithFogBypass(tokenIds, positions);
+
+  // Move the local camera to the destination portal (only on the
+  // originating client — BROADCAST_TELEPORT is LOCAL only). Instant
+  // when called from the blink-proceed apex (overlay hides any flash),
+  // smooth-pan otherwise. Either way, scale is preserved.
+  try {
+    const [vw, vh, vpScale] = await Promise.all([
+      OBR.viewport.getWidth(),
+      OBR.viewport.getHeight(),
+      OBR.viewport.getScale(),
+    ]);
+    const targetPos = {
+      x: -center.x * vpScale + vw / 2,
+      y: -center.y * vpScale + vh / 2,
+    };
+    if (instantCamera) {
+      await OBR.viewport.setPosition(targetPos).catch(() => {});
+    } else {
+      OBR.viewport.animateTo({ position: targetPos, scale: vpScale }).catch(() => {});
+    }
+  } catch {}
+
+  // Drop the teleported tokens from selection. Without this, OBR's
+  // multi-select carryover means the next drag of any token in the
+  // set moves the WHOLE party — user reads that as "drag teleported
+  // the wrong tokens too". Player has to click again to re-establish
+  // a fresh selection.
+  try { await OBR.player.deselect(tokenIds); } catch {}
+
+  // 2026-05-17 — defensive reset of the entry-detector state machine
+  // so a teleport can't leave anything latched ON. Without this, a
+  // successful teleport that didn't go through the blink path (rare
+  // — e.g. blink disabled + closeDestinationPopover failed) could
+  // leave destPopoverOpen=true, blocking every subsequent drag-into
+  // -portal from ever firing the popover again. User report:
+  // "进行过一次传送后，那么就没办法再次进行传送了，不会显示弹窗".
+  destPopoverOpen = false;
+  if (destPopoverSafetyTimer) {
+    clearTimeout(destPopoverSafetyTimer);
+    destPopoverSafetyTimer = null;
+  }
+  blinkModalOpen = false;
+  // Clear stale moved-IDs so the next drag's onDragEnd doesn't see
+  // teleported tokens in its working set. The proceed handler also
+  // strips tJob.tokenIds, but if we teleported via the no-blink path
+  // that handler never runs.
+  for (const id of tokenIds) {
+    movedByMeIds.delete(id);
+    lastTokenPos.delete(id);
+  }
+  // Cancel any debounce timer that fired during teleport — its
+  // callback would see an inconsistent world.
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
+}
+
+// --- Setup / teardown -----------------------------------------------------
+
+// One-shot migration for portals created in plugin v0.x where the
+// SVG image was 96×96. The shipped portal-icon.svg is now 64×64
+// (matching ICON_INTRINSIC), and OBR logs a "content size 96 does
+// not match image size 64" warning every time those legacy items
+// render. Sweep them on setup and rewrite image.width / image.height
+// to ICON_SIZE so the warning stops. Idempotent — items already at
+// ICON_SIZE skip the update.
+async function migrateLegacyPortals(): Promise<void> {
+  try {
+    const items = await OBR.scene.items.getItems(isPortal);
+    const stale = items.filter(it => needsPortalIconMigration(it, ICON_URL));
+    if (stale.length === 0) return;
+    await OBR.scene.items.updateItems(
+      stale.map((it: any) => it.id),
+      (drafts: any[]) => {
+        for (const d of drafts) {
+          // Recheck inside the actual write: a picker may have replaced this
+          // old bundled image while the update was in flight.
+          migratePortalIconDraft(d, ICON_URL);
+        }
+      },
+    );
+  } catch (e) {
+    console.warn("[obr-suite/portals] portal migration skipped", e);
+  }
+}
+
+export async function setupPortals(): Promise<void> {
+  portalEditorActive = true; ++portalEditorAuthority;
+  try { editorConnectionId = await OBR.player.getConnectionId(); } catch { editorConnectionId = ""; }
+  try { role = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch (e) {
+    console.warn("[obr-suite/portals] getRole failed — assuming PLAYER", e);
+  }
+  try { myPlayerId = await OBR.player.getId(); } catch (e) {
+    console.error("[obr-suite/portals] getId failed — drag attribution disabled until player change", e);
+  }
+
+  // Quietly normalise old portals (image.width/height = 96 from earlier
+  // versions) to the current ICON_SIZE so OBR stops warning on every
+  // render. Only the GM has scene-write permission, so we gate on role.
+  if (role === "GM") {
+    void migrateLegacyPortals();
+  }
+
+  // GM-only tool icon. Players don't need the draw tool — they only get the
+  // entry detector + destination prompt path.
+  if (role === "GM") {
+    await OBR.tool.create({
+      id: TOOL_ID,
+      icons: [
+        {
+          icon: TOOL_ICON_URL,
+          label: _t("portalToolName"),
+          filter: { roles: ["GM"] },
+        },
+      ],
+      defaultMode: TOOL_MODE_ID,
+      onClick: async () => {
+        await OBR.tool.activateTool(TOOL_ID);
+        return false;
+      },
+    });
+
+    await OBR.tool.createMode({
+      id: TOOL_MODE_ID,
+      icons: [
+        {
+          icon: TOOL_ICON_URL,
+          label: _t("portalToolHint"),
+          filter: { activeTools: [TOOL_ID] },
+        },
+      ],
+      cursors: [{ cursor: "crosshair" }],
+      onToolDragStart: async (_ctx, event) => {
+        // If the drag began on an existing portal item, don't draw — let
+        // OBR handle the move/select instead.
+        const target: any = (event as any).target;
+        if (target && target.metadata && target.metadata[PORTAL_KEY]) {
+          dragStart = null;
+          return;
+        }
+        const p = (event as any).pointerPosition as { x: number; y: number };
+        if (!p) return;
+        dragStart = { x: p.x, y: p.y };
+        await startPreview(p);
+      },
+      onToolDragMove: async (_ctx, event) => {
+        if (!dragStart) return;
+        const p = (event as any).pointerPosition as { x: number; y: number };
+        if (!p) return;
+        const r = dist(dragStart, p);
+        await updatePreview(dragStart, r);
+      },
+      onToolDragEnd: async (_ctx, event) => {
+        if (!dragStart) return;
+        const p = (event as any).pointerPosition as { x: number; y: number };
+        const center = dragStart;
+        dragStart = null;
+        await clearPreview();
+        if (!p) return;
+        const radius = dist(center, p);
+        if (radius < MIN_RADIUS) return; // Treat as click — no portal created.
+        await createPortal(center, radius);
+      },
+      onToolDragCancel: async () => {
+        dragStart = null;
+        await clearPreview();
+      },
+      onDeactivate: async () => {
+        dragStart = null;
+        await clearPreview();
+      },
+    });
+
+    await OBR.tool.createMode({
+      id: TOOL_PAIR_MODE_ID,
+      icons: [
+        {
+          icon: TOOL_ICON_URL,
+          label: _lang() === "en" ? "Create linked pair" : "点两处创建一对传送门",
+          filter: { activeTools: [TOOL_ID] },
+        },
+      ],
+      cursors: [{ cursor: "crosshair" }],
+      onToolMove: async (_ctx, event) => {
+        if (!pairFirst) return;
+        const p = (event as any).pointerPosition as { x: number; y: number } | undefined;
+        if (!p) return;
+        await updatePairLinePreview({ x: p.x, y: p.y });
+      },
+      onToolClick: async (_ctx, event) => {
+        const p = (event as any).pointerPosition as { x: number; y: number } | undefined;
+        if (!p) return false;
+        const target: any = (event as any).target;
+        if (!pairFirst && target && target.metadata && target.metadata[PORTAL_KEY]) {
+          return true;
+        }
+        if (!pairFirst) {
+          pairFirst = { x: p.x, y: p.y };
+          await clearPairPreview();
+          await startPreview(pairFirst, DEFAULT_RADIUS);
+          await startPairLinePreview(pairFirst, pairFirst);
+          return false;
+        }
+        const first = pairFirst;
+        pairFirst = null;
+        await clearPairPreview();
+        if (dist(first, p) < MIN_RADIUS) return false;
+        await createLinkedPortalPair(first, { x: p.x, y: p.y });
+        return false;
+      },
+      onKeyDown: async (_ctx, event) => {
+        if (event.key !== "Escape") return;
+        pairFirst = null;
+        await clearPairPreview();
+      },
+      onDeactivate: async () => {
+        pairFirst = null;
+        await clearPairPreview();
+      },
+    });
+  }
+
+  // Coordinate baseline for drag detection — built BEFORE the
+  // items.onChange subscription below so the very first drag after
+  // scene load diffs against a real previous position (awaited: if the
+  // subscription registered first, a later-resolving baseline fetch
+  // could overwrite a fresher onChange position and fake a move).
+  portalEditorReady = await OBR.scene.isReady().catch(() => false);
+  if (portalEditorReady) {
+    await rebuildDragBaseline("setup");
+  }
+  // background.ts does NOT re-run module setup on scene switches
+  // (moduleStatus stays "on"), so the module re-baselines itself.
+  unsubs.push(
+    OBR.scene.onReadyChange((ready) => {
+      portalEditorReady = ready;
+      portalEffectEpoch++;
+      suppressAutoEditOnce = null;
+      void closeEditPopover();
+      portalEffectController?.abort();
+      portalEffectController = null;
+      if (ready) {
+        void rebuildDragBaseline("scene-ready");
+      } else {
+        lastTokenPos.clear();
+        movedByMeIds.clear();
+        recentlyTeleported.clear();
+        if (dragEndTimer) {
+          clearTimeout(dragEndTimer);
+          dragEndTimer = null;
+        }
+      }
+    })
+  );
+
+  // Selection watcher (DM): single-portal selection → edit popover.
+  // Also dismisses the destination popover when the user clicks
+  // somewhere else (selection changes), so the bubble doesn't linger
+  // after the user has clearly moved on.
+  //
+  // 2026-08-20 (checklist §3): this watcher NO LONGER seeds or prunes
+  // lastTokenPos. Baselines come from rebuildDragBaseline (scene
+  // start) and are maintained as a full-scene snapshot inside
+  // onItemsMaybeDragging. The old selection-time seeding awaited a
+  // getItems round-trip that raced the drag's own items.onChange, and
+  // its per-selection prune wiped baselines on every selection change
+  // — both were first-drag misses.
+  let prevSelectionKey = "";
+  unsubs.push(
+    OBR.player.onChange(async (player) => {
+      if (player.id) myPlayerId = player.id;
+      if ((player.role === "GM" || player.role === "PLAYER") && player.role !== role) {
+        role = player.role; ++portalEditorAuthority;
+        suppressAutoEditOnce = null;
+        void closeEditPopover();
+      }
+      try {
+        if (role === "GM") await handleDMSelectionForEdit(player.selection);
+      } catch (e) {
+        console.warn("[obr-suite/portals] DM selection edit handler failed", e);
+      }
+      const selKey = (player.selection ?? []).slice().sort().join(",");
+      if (destPopoverOpen && selKey !== prevSelectionKey) {
+        void closeDestinationPopover();
+      }
+      prevSelectionKey = selKey;
+    })
+  );
+
+  // Item changes drive both DM edit (portal could be deleted) and the
+  // player drag-end portal-entry check.
+  unsubs.push(
+    OBR.scene.items.onChange(async (items) => {
+      const editingId = desiredEdit?.id ?? currentEditId;
+      if (editingId) {
+        if (!items.find((i) => i.id === editingId)) {
+          await closeEditPopover();
+        }
+      }
+      await onItemsMaybeDragging(items);
+    })
+  );
+
+  // Destination popover → blink modal → (proceed) → teleport.
+  // The popover sends BROADCAST_TELEPORT when the user picks a
+  // destination. We close the popover and open the blink modal; the
+  // modal animates eyelids closing, then sends BROADCAST_BLINK_PROCEED
+  // back to us — that's when the actual position update runs (camera
+  // jumps instantly so the post-blink eye-open lands on the
+  // destination). When the teleport finishes we send
+  // BROADCAST_BLINK_DONE so the modal can run the eye-open animation
+  // and close itself.
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_TELEPORT, async (msg) => {
+      const data = msg.data as
+        | { destPortalId: string; tokenIds: string[]; entryId?: string }
+        | undefined;
+      if (!data) return;
+      // Old popovers without entryId retain the legacy global effect.
+      const entryId = typeof data.entryId === "string" ? data.entryId : undefined;
+      const generation = portalEffectEpoch;
+      await closeDestinationPopover();
+      let effect: unknown = "inherit";
+      if (entryId) {
+        try { effect = (await OBR.scene.items.getItems([entryId]))[0]?.metadata[PORTAL_KEY]; }
+        catch { /* Missing source metadata retains the legacy global fallback. */ }
+      }
+      if (generation !== portalEffectEpoch) return;
+      const selection = resolvePortalEffect((effect as PortalMeta | undefined)?.effect, readBlinkEnabled(), prefersReducedMotion());
+      if (selection === "inherit") {
+        await openBlinkAndTeleport(data.destPortalId, data.tokenIds, entryId);
+      } else if (selection === "blink" || selection === "fade") {
+        portalEffectController?.abort();
+        const controller = new AbortController();
+        portalEffectController = controller;
+        try {
+          const { playScreenTransition } = await import("../transitions/screen-effect");
+          if (controller.signal.aborted || generation !== portalEffectEpoch) return;
+          await playScreenTransition(selection, 1_200, controller.signal);
+        } catch (error) {
+          // Loading an optional visual must never strand a valid teleport.
+          console.warn("[portals] screen transition unavailable", error);
+        }
+        if (controller.signal.aborted || generation !== portalEffectEpoch) return;
+        await teleport(data.destPortalId, data.tokenIds, true, entryId);
+        for (const id of data.tokenIds) movedByMeIds.delete(id);
+      } else {
+        // Blink disabled — direct teleport with the smooth animateTo
+        // camera move (instantCamera=false) so the user still sees a
+        // brief pan to the destination instead of an abrupt snap.
+        await teleport(data.destPortalId, data.tokenIds, false, entryId);
+      }
+    })
+  );
+
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_BLINK_PROCEED, async () => {
+      const tJob = pendingTeleport;
+      const fJob = pendingFocus;
+      const gJob = pendingGather;
+      pendingTeleport = null;
+      pendingFocus = null;
+      pendingGather = null;
+      if (!tJob && !fJob && !gJob) {
+        // Modal asked to proceed but we've already cleared the job
+        // (e.g. modal opened twice somehow). Tell it to recover.
+        blinkModalOpen = false;
+        try {
+          await OBR.broadcast.sendMessage(BROADCAST_BLINK_DONE, {}, { destination: "LOCAL" });
+        } catch {}
+        return;
+      }
+      if (tJob) {
+        await teleport(tJob.destPortalId, tJob.tokenIds, true, tJob.entryId);
+        // The teleport's own updateItems calls fire scene.items.onChange
+        // → onItemsMaybeDragging → seeds movedByMeIds with the teleported
+        // IDs (because lastModifiedUserId is this client). If we don't
+        // strip them now, the next genuine user drag hits onDragEnd
+        // with movedNow = {teleported tokens, plus newly-dragged token}
+        // — and any teleported token still sitting on its destination
+        // portal will re-trigger the popover with the wrong tokenIds.
+        for (const id of tJob.tokenIds) movedByMeIds.delete(id);
+      } else if (gJob) {
+        // Initiative gather (DM client only). Move tokens with the
+        // same fog/wall bypass that teleport uses, then instant-snap
+        // the camera to the gather point. Remote players got their
+        // own blink-and-focus broadcast separately — they only need
+        // the camera focus on their side (positions sync via OBR).
+        await moveTokensWithFogBypass(gJob.tokenIds, gJob.positions);
+        for (const id of gJob.tokenIds) movedByMeIds.delete(id);
+        try {
+          const [vw, vh, vpScale] = await Promise.all([
+            OBR.viewport.getWidth(),
+            OBR.viewport.getHeight(),
+            OBR.viewport.getScale(),
+          ]);
+          const target = {
+            x: -gJob.center.x * vpScale + vw / 2,
+            y: -gJob.center.y * vpScale + vh / 2,
+          };
+          await OBR.viewport.setPosition(target).catch(() => {});
+        } catch {}
+      } else if (fJob) {
+        // Camera-only focus (remote-side companion to gather / any
+        // other "blink + focus" cinematic). No token movement on this
+        // client — the originating GM already updated positions; OBR
+        // scene-sync brings them here.
+        try {
+          const [vw, vh, vpScale] = await Promise.all([
+            OBR.viewport.getWidth(),
+            OBR.viewport.getHeight(),
+            OBR.viewport.getScale(),
+          ]);
+          const target = {
+            x: -fJob.x * vpScale + vw / 2,
+            y: -fJob.y * vpScale + vh / 2,
+          };
+          await OBR.viewport.setPosition(target).catch(() => {});
+        } catch {}
+      }
+      // Release the gate as soon as the work finishes — the remaining
+      // eye-open animation (~500 ms) is purely visual and shouldn't
+      // swallow the user's next drag.
+      blinkModalOpen = false;
+      try {
+        await OBR.broadcast.sendMessage(BROADCAST_BLINK_DONE, {}, { destination: "LOCAL" });
+      } catch {}
+    })
+  );
+
+  // 2026-05-12 — cross-client "blink + focus" trigger (initiative
+  // gather etc.). Each client honours its own LS_BLINK_KEY: blink on
+  // → modal + instant camera snap; blink off → smooth animateTo.
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_BLINK_AND_FOCUS, async (msg) => {
+      const data = msg.data as { x?: number; y?: number } | undefined;
+      if (
+        !data ||
+        typeof data.x !== "number" ||
+        typeof data.y !== "number" ||
+        !Number.isFinite(data.x) ||
+        !Number.isFinite(data.y)
+      ) return;
+      await openBlinkAndFocus({ x: data.x, y: data.y });
+    })
+  );
+
+  // The blink modal sends this right before it closes itself, so the
+  // background can flip its open flag back off. (Modal onClose is not
+  // surfaced by OBR, so we rely on the page's beforeunload handler.)
+  unsubs.push(
+    OBR.broadcast.onMessage(`${PLUGIN_ID}/blink-modal-closed`, () => {
+      blinkModalOpen = false;
+      pendingTeleport = null;
+    })
+  );
+
+  // Edit popover save / delete / close (broadcast from edit page back to bg).
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_EDIT_SAVE, async (msg) => {
+      const data = msg.data as
+        | { id: string; name: string; tag: string }
+        | undefined;
+      if (!data) return;
+      try {
+        await OBR.scene.items.updateItems([data.id], (drafts) => {
+          for (const d of drafts) {
+            const cur = (d.metadata[PORTAL_KEY] as PortalMeta | undefined) ?? {
+              name: "",
+              tag: "",
+              radius: 70,
+            };
+            d.metadata[PORTAL_KEY] = {
+              name: data.name,
+              tag: data.tag,
+              radius: cur.radius,
+              showName: cur.showName,
+              visible: cur.visible,
+              locked: cur.locked,
+              effect: cur.effect,
+            };
+          }
+        });
+      } catch (e) {
+        console.error("[obr-suite/portals] save failed", e);
+      }
+    })
+  );
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_EDIT_DELETE, async (msg) => {
+      const data = msg.data as { id: string } | undefined;
+      if (!data) return;
+      const revision = editRequestRevision, epoch = portalEffectEpoch;
+      try { await OBR.scene.items.deleteItems([data.id]); } catch {}
+      if (revision === editRequestRevision && epoch === portalEffectEpoch) await closeEditPopover();
+    })
+  );
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_EDIT_CLOSE, handleEditClose)
+  );
+
+  // Popover-close detector: when the destination popover closes via
+  // user × / Esc / page unload, it broadcasts here so we can reset
+  // destPopoverOpen. (OBR doesn't expose a popover close-event API.)
+  unsubs.push(
+    OBR.broadcast.onMessage(BROADCAST_DEST_CLOSED, () => {
+      destPopoverOpen = false;
+      if (destPopoverSafetyTimer) {
+        clearTimeout(destPopoverSafetyTimer);
+        destPopoverSafetyTimer = null;
+      }
+    })
+  );
+
+  // No initial pass — only player drag-end events trigger the popover.
+  // If the player happens to have selected a token already inside a
+  // portal at scene load, no popover opens until they drag the token.
+
+  // Layout-editor drag-end / global reset → re-anchor the edit
+  // popover with the new offset/size if it's currently open.
+  unsubs.push(
+    OBR.broadcast.onMessage(BC_PANEL_DRAG_END, async (event) => {
+      const payload = event.data as DragEndPayload | undefined;
+      if (payload?.panelId !== PANEL_IDS.portalEdit) return;
+      await reanchorEditPopover();
+    }),
+  );
+  unsubs.push(
+    OBR.broadcast.onMessage(BC_PANEL_RESET, async () => {
+      await reanchorEditPopover();
+    }),
+  );
+}
+
+export async function teardownPortals(): Promise<void> {
+  portalEditorActive = false; portalEditorReady = false; ++portalEditorAuthority;
+  portalEffectEpoch++;
+  portalEffectController?.abort();
+  portalEffectController = null;
+  await closeEditPopover();
+  await closeDestinationPopover();
+  await closeBlinkModal();
+  await clearPairPreview();
+  // This client may have lost its GM role after registering the tools.
+  try { await OBR.tool.removeMode(TOOL_PAIR_MODE_ID); } catch {}
+  try { await OBR.tool.removeMode(TOOL_MODE_ID); } catch {}
+  try { await OBR.tool.remove(TOOL_ID); } catch {}
+  for (const u of unsubs.splice(0)) u();
+  if (dragEndTimer) {
+    clearTimeout(dragEndTimer);
+    dragEndTimer = null;
+  }
+  if (destPopoverSafetyTimer) {
+    clearTimeout(destPopoverSafetyTimer);
+    destPopoverSafetyTimer = null;
+  }
+  movedByMeIds.clear();
+  pendingTeleport = null;
+  pendingFocus = null;
+  pendingGather = null;
+  pairFirst = null;
+  lastTokenPos.clear();
+  recentlyTeleported.clear();
+  myPlayerId = "";
+  if (editPopoverOpen) throw Error("Portal editor cleanup failed; teardown can be retried.");
+}

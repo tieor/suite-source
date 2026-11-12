@@ -1,0 +1,99 @@
+name: Verify Suite candidate
+on:
+  push:
+    branches: [main, codex/performance-closeout-stable-20261011]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: suite-verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DND_CARD_WEB_ROOT: ${{ github.workspace }}/.paired-web
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out exact paired Web source
+        uses: actions/checkout@v6
+        with:
+          repository: FullPeople/DND-card-web
+          ref: c2d20cdc9e434dd8c22e4e89966ece51c39120af
+          path: .paired-web
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.9.0'
+      - run: npm ci
+      - run: npm ci
+        working-directory: .paired-web
+      - name: Verify pinned rule source and real consumer evidence
+        working-directory: .paired-web
+        run: |
+          npm run verify:automation-source
+          npm run verify:automation-runtime
+          npm run verify:automation-progress
+      - name: Build exact paired cloud and five-page viewer
+        working-directory: .paired-web
+        run: |
+          npm run build:cloud
+          node node_modules/vite/bin/vite.js build
+      - name: Build stable host and its included viewer
+        run: |
+          node node_modules/typescript/bin/tsc
+          node node_modules/vite/bin/vite.js build
+          node tools/build-legacy-card-viewer.mjs --web-built
+      - name: Install official Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Verify transparent Boss and initiative canvases in actual built iframes
+        run: |
+          node tools/native-canvas-selftest.mjs
+          node tools/transparent-canvas-browser.mjs --built dist --channel suite --legacy
+      - name: Actual production cloud suspension and retained sessions
+        run: node tools/cloud-suspended-selftest.mjs
+      - name: Stable regressions including QQ ordering and personal preferences
+        run: node tools/verify-suite-candidate.mjs
+      - name: Actual legacy picker binding and permission revocation
+        run: node tools/character-directory259-selftest.mjs
+      - name: Actual legacy QQ pages and HTTP room permissions
+        run: node tools/qq-room-browser-selftest.mjs
+      - name: Preserve bounded evidence and exact stable package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-verification-${{ github.sha }}
+          retention-days: 2
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .local-evidence/transparent-canvas291/
+            .local-evidence/verification/
+            .local-evidence/directory259/
+            .local-evidence/qq-room/
+            dist/
+
+  dice-history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.9.0'
+      - run: npm ci
+      - name: Install official Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Actual stable dice panel and history popover storage lifecycle
+        run: node tools/dice-history-storage-browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stable-dice-history-${{ github.sha }}
+          include-hidden-files: true
+          retention-days: 2
+          path: .local-evidence/dice-history-storage/

@@ -1,0 +1,22 @@
+{
+  "name": "Full Suite (Dev)",
+  "version": "0.0.5",
+  "manifest_version": 1,
+  "author": "FullPeople",
+  "description": "Full Suite 测试版 / dev build.",
+  "icon": "/suite-dev/exe_icon.png",
+  "background_url": "/suite-dev/background.html",
+  "permissions": [
+    {
+      "name": "autoplay",
+      "reason": "Play shared music in the persistent background after the player enables sound."
+    }
+  ],
+  "action": {
+    "title": "Full Suite · 角色卡与 Wiki (Dev)",
+    "icon": "/suite-dev/exe_icon.png",
+    "popover": "/suite-dev/workbench-launcher.html",
+    "width": 420,
+    "height": 540
+  }
+}

@@ -1,0 +1,3655 @@
+import {DICE_HISTORY_LIMIT,canSeeDiceHistory,diceHistory,storedDiceHistory,type DiceHistoryVisibility} from './history-policy';
+import OBR from "@owlbear-rodeo/sdk";
+import { DiceType, DieResult, sidesOf } from "./types";
+import { subscribeToSfx } from "./sfx-broadcast";
+import { applyI18nDom, t } from "../../i18n";
+import { getLocalLang, onLangChange } from "../../state";
+import {
+  readFixedRoll,
+  armFixedRoll,
+  disarmFixedRoll,
+  consumeFixedRoll,
+  distributeFaces,
+  faceBounds,
+  randIntInclusive,
+  FIXED_ROLL_LS_KEY,
+  type DieSpec,
+} from "./fixed-roll";
+import { assetUrl } from "../../asset-base";
+import {
+  writeSkin, isVideoSkin, type DiceSkins, type DiceSkin,
+  readActiveSkins, readMyLibrary,
+  addToLibrary, removeFromLibrary, setActiveSkin, setRandomMode,
+  saveCurrentAsSet, applySet, deleteSet,
+} from "./dice-skins";
+
+let lang = getLocalLang();
+const tt = (k: Parameters<typeof t>[1]) => t(lang, k);
+
+// Dice panel — three tabs (投掷 / 组合 / 历史). Loaded by OBR's action
+// drawer / popover. Owns the expression UI + history view, broadcasts
+// dice rolls via BROADCAST_DICE_ROLL for the visual half (effect-page).
+
+const ALL_TYPES: DiceType[] = ["d4", "d6", "d8", "d10", "d12", "d20", "d100"];
+
+const BROADCAST_DICE_ROLL = "com.obr-suite/dice-roll";
+const BC_DICE_FORCE_CLEAR = "com.obr-suite/dice-force-clear";
+const BC_DICE_FADE_START = "com.obr-suite/dice-fade-start";
+// Sent by the bottom-left history popover when a row is clicked. Tells
+// the panel to switch to the History tab + select that player as the
+// filter. Always sent LOCAL — only this client's panel reacts.
+const BC_DICE_HISTORY_FILTER = "com.obr-suite/dice-history-filter";
+// Replay-overlay channel. Click a history row → broadcast
+// `{ cid, action: "toggle" }` LOCAL+REMOTE. The dice background module
+// owns the open/close logic — same cid twice = close, different cid =
+// reopen on top. The bottom-right history modal also broadcasts on
+// this channel and listens for "close" so both UIs stay in sync.
+const BC_DICE_REPLAY = "com.obr-suite/dice-replay";
+const ANIM_FALLBACK_MS = 6000;
+
+const LS_COMBOS  = "obr-suite/dice/combos";
+// Per-room dice history. See history-page.ts for the rationale —
+// suffix the key with `OBR.room.id` so different rooms keep
+// independent scrollbacks.
+const LS_HISTORY_BASE = "obr-suite/dice/history";
+function safeRoomKey(rid: string): string {
+  return rid.replace(/[^a-zA-Z0-9_-]/g, "_") || "default";
+}
+let LS_HISTORY = `${LS_HISTORY_BASE}:default`;
+const LS_LAST_EXPR = "obr-suite/dice/last-expr";
+const HISTORY_CAP = DICE_HISTORY_LIMIT;
+
+// 2026-05-14 — DM "全局暗骰" toggle. When ON, every regular roll
+// (main 投掷 button + each combo's 投掷 button) is treated as if the
+// DM clicked 暗骰 instead. Per-DM-client localStorage so each DM can
+// flip the toggle without affecting others. Default OFF.
+const LS_GLOBAL_DARK_ROLL = "obr-suite/dice/global-dark-roll";
+function getGlobalDarkRoll(): boolean {
+  try {
+    return localStorage.getItem(LS_GLOBAL_DARK_ROLL) === "1";
+  } catch { return false; }
+}
+function setGlobalDarkRoll(v: boolean): void {
+  try { localStorage.setItem(LS_GLOBAL_DARK_ROLL, v ? "1" : "0"); } catch {}
+}
+
+interface DiceRollPayload {
+  itemId: string | null;
+  dice: DieResult[];
+  winnerIdx: number;
+  modifier: number;
+  label: string;
+  expression?: string;
+  total: number;
+  rollerId: string;
+  rollerName: string;
+  rollerColor: string;
+  rollId: string;
+  ts: number;
+  hidden?: boolean;
+  visibility?: DiceHistoryVisibility;
+  // Layout/animation hints introduced by the new wrappers:
+  // - rowStarts: explicit row boundaries for `repeat(N, ...)`. Row i
+  //   spans [rowStarts[i], rowStarts[i+1]) (last row goes to end of
+  //   dice[]). Each row computes its own total at the row's right
+  //   edge instead of the global running total above.
+  // - sameHighlight: if true, run a "duplicates pulse" animation
+  //   between settle and rush — matched-value dice scale up and
+  //   their numbers tint to the player color. Set by `same(...)`.
+  rowStarts?: number[];
+  sameHighlight?: boolean;
+  // Multi-target rolls share a collectiveId so the history popover
+  // groups them into one row and click-to-replay can find all
+  // members of the group.
+  collectiveId?: string;
+}
+
+interface SavedCombo {
+  id: string;
+  name: string;
+  expr: string;
+  // Optional category. Empty / undefined = uncategorized (rendered
+  // under a default group at the top of the list).
+  category?: string;
+}
+
+// Versioned persistence shape so we can migrate older saves without
+// dropping data. v1 was a bare SavedCombo[]. v2 wraps it in an
+// object with `combos` + `categoryOrder` so categories can sort
+// independently of the combos within them.
+interface CombosFile {
+  version: 2;
+  combos: SavedCombo[];
+  // Stable ordering of category names — used to sequence the section
+  // headers in the UI. Categories appearing in `combos` but missing
+  // from this array are appended at load time.
+  categoryOrder: string[];
+}
+
+const UNCATEGORIZED_KEY = "";
+
+// --- State ---
+let expression = "";
+let labelText = "";
+let combos: SavedCombo[] = [];
+let categoryOrder: string[] = [];
+{
+  const f = loadCombos();
+  combos = f.combos;
+  categoryOrder = f.categoryOrder;
+}
+let history: DiceRollPayload[] = loadHistory();
+let lastRolledExpression: string = loadLastExpr();
+let activeTab: "roll" | "combos" | "history" | "skins" = "roll";
+let historyFilter = "";
+// Currently-active replay's collective-id (LOCAL state). Set when this
+// client clicks a history row, cleared when the replay closes — so the
+// row that triggered it lights up with a "replay-active" border, and a
+// second click on the same row toggles it back off.
+// 2026-05-10: also persisted in localStorage under
+// `obr-suite/dice/active-replay-cid` whenever it changes — the
+// bottom-left history popover writes there too, so a panel that
+// opens AFTER the user clicked a history row still picks up the
+// highlight on its own init (broadcasts can't be replayed to a
+// listener that wasn't subscribed yet).
+const LS_ACTIVE_REPLAY_CID = "obr-suite/dice/active-replay-cid";
+let activeReplayCid: string | null = (() => {
+  try { return localStorage.getItem(LS_ACTIVE_REPLAY_CID); } catch { return null; }
+})();
+function setActiveReplayCid(v: string | null) {
+  activeReplayCid = v;
+  try {
+    if (v) localStorage.setItem(LS_ACTIVE_REPLAY_CID, v);
+    else localStorage.removeItem(LS_ACTIVE_REPLAY_CID);
+  } catch {}
+}
+let isAnimating = false;
+let animationTimer: number | null = null;
+// Roll IDs the panel itself spawned. Used to filter BC_DICE_FADE_START
+// so initiative-rolled climaxes don't prematurely release the panel's
+// lock (initiative + panel rolls can coexist on the same client).
+const myActiveRollIds = new Set<string>();
+// DM-only flag — gates visibility of the 暗骰 (dark roll) button.
+let isDM = false;
+// This client's own player id, captured at onReady. Used by the
+// dark-roll redact gate in the BROADCAST_DICE_ROLL listener so a DM
+// who happens to be the roller still gets their own entry stored on
+// their own client.
+let myPlayerId = "";
+const historyViewer=()=>({playerId:myPlayerId,role:myPlayerId?(isDM?'GM':'PLAYER'):''});
+const visibleHistory=()=>diceHistory(history,historyViewer());
+
+// --- DOM refs ---
+const diceRow      = document.getElementById("diceRow")      as HTMLDivElement;
+const exprInput    = document.getElementById("exprInput")    as HTMLInputElement;
+const labelInput   = document.getElementById("labelInput")   as HTMLInputElement;
+const btnRoll      = document.getElementById("btnRoll")      as HTMLButtonElement;
+const btnLastRoll  = document.getElementById("btnLastRoll")  as HTMLButtonElement;
+const btnSave      = document.getElementById("btnSave")      as HTMLButtonElement;
+const btnClear     = document.getElementById("btnClear")     as HTMLButtonElement;
+const btnForceClr  = document.getElementById("btnForceClr")  as HTMLButtonElement;
+const btnAdv       = document.getElementById("btnAdv")       as HTMLButtonElement;
+const btnDis       = document.getElementById("btnDis")       as HTMLButtonElement;
+const btnCrit      = document.getElementById("btnCrit")      as HTMLButtonElement | null;
+const comboList    = document.getElementById("comboList")    as HTMLDivElement;
+const historyList  = document.getElementById("historyList")  as HTMLDivElement;
+const historySeg   = document.getElementById("historySeg")   as HTMLDivElement;
+const btnClearHist = document.getElementById("btnClearHistory") as HTMLButtonElement;
+const tabBtns      = document.querySelectorAll<HTMLButtonElement>(".tab");
+const tabPanes     = document.querySelectorAll<HTMLDivElement>(".tabPane");
+const skinList     = document.getElementById("skinList")     as HTMLDivElement | null;
+
+// --- localStorage helpers ---
+function loadCombos(): { combos: SavedCombo[]; categoryOrder: string[] } {
+  try {
+    const v = localStorage.getItem(LS_COMBOS);
+    if (!v) return { combos: [], categoryOrder: [] };
+    const p = JSON.parse(v);
+    // Legacy v1: bare array of SavedCombo. Migrate by treating each
+    // entry's category as uncategorized.
+    if (Array.isArray(p)) {
+      return { combos: p as SavedCombo[], categoryOrder: [] };
+    }
+    if (p && typeof p === "object" && Array.isArray(p.combos)) {
+      const order = Array.isArray(p.categoryOrder)
+        ? p.categoryOrder.filter((x: any): x is string => typeof x === "string")
+        : [];
+      // Append any category names referenced by combos but missing
+      // from the saved order so they still render.
+      const seen = new Set(order);
+      for (const c of p.combos as SavedCombo[]) {
+        const cat = (c.category ?? "").trim();
+        if (cat && !seen.has(cat)) {
+          seen.add(cat);
+          order.push(cat);
+        }
+      }
+      return { combos: p.combos as SavedCombo[], categoryOrder: order };
+    }
+  } catch {}
+  return { combos: [], categoryOrder: [] };
+}
+function saveCombos() {
+  try {
+    const file: CombosFile = { version: 2, combos, categoryOrder };
+    localStorage.setItem(LS_COMBOS, JSON.stringify(file));
+  } catch {}
+}
+function loadHistory(fallback: DiceRollPayload[] = []): DiceRollPayload[] {
+  try {
+    const v = localStorage.getItem(LS_HISTORY);
+    if (!v) return [];
+    const p = JSON.parse(v);
+    if (Array.isArray(p)) {const rows=storedDiceHistory(p) as DiceRollPayload[];if(p.length>HISTORY_CAP)localStorage.setItem(LS_HISTORY,JSON.stringify(rows));return rows;}
+  } catch { return fallback; }
+  return [];
+}
+function saveHistory() { try { localStorage.setItem(LS_HISTORY, JSON.stringify(storedDiceHistory(history))); } catch {} }
+function loadLastExpr(): string {
+  try { return localStorage.getItem(LS_LAST_EXPR) ?? ""; } catch { return ""; }
+}
+function saveLastExpr(v: string) { try { localStorage.setItem(LS_LAST_EXPR, v); } catch {} }
+
+// --- Expression parser ---
+//
+// Supports a layered grammar:
+//   PLAIN: "2d6 + 1d20 + 5" — sum of NdM terms + flat modifier
+//   WRAPPERS: any of these can recursively wrap an inner expression
+//     adv(<inner>[,N])   — roll <inner> N+1 times, keep the higher
+//                          summed set; losing dice flagged `loser`.
+//     dis(<inner>[,N])   — same but keep the lower set.
+//     max(<inner>,X)     — clamp every die's value UP to at least X.
+//                          Original value preserved as originalValue
+//                          so the visual can show "3(1)".
+//     min(<inner>,X)     — clamp every die's value DOWN to at most X.
+//     reset(<inner>,X)   — force every die to value X.
+//     same(<inner>)      — flag for "duplicate-value highlight" before
+//                          the rush sequence. Doesn't change dice.
+//     burst(<inner>)     — explosion: every kept die that rolls its
+//                          maximum face triggers an extra roll of the
+//                          same type, added to the dice list. Cap 5
+//                          per starting die.
+//     repeat(N,<inner>)  — runs the inner expression N times (each
+//                          with its own dice rolls) and tells the
+//                          visual to lay out one row per iteration
+//                          with an independent per-row total.
+//                          Special: repeat MUST be outermost.
+//
+// Wrappers are stored innermost-first so apply order is wrappers[0],
+// wrappers[1], ... when rolling.
+//
+// Chinese full-width parens / commas are normalised to ASCII first.
+
+interface ExprGroup { type: string; count: number }
+interface PlainExpr { groups: ExprGroup[]; modifier: number }
+type WrapperKind = "adv" | "dis" | "max" | "min" | "reset" | "resetmin" | "resetmax" | "same" | "burst" | "repeat";
+interface Wrapper {
+  kind: WrapperKind;
+  // adv/dis: extra sets (N from "adv(...,N)"); default 1.
+  // max/min/reset/resetmin/resetmax: the threshold/replacement value.
+  //   reset(d, X)    — TRIGGERED reroll when value EQUALS X.
+  //   resetmin(d, X) — TRIGGERED reroll when value <= X.
+  //   resetmax(d, X) — TRIGGERED reroll when value >= X.
+  // repeat: iteration count.
+  // same/burst: undefined.
+  param?: number;
+}
+// One independently-wrapped sub-expression. `adv(1d6)+adv(1d4)` parses
+// to TWO segments — {plain:[d6], wrappers:[adv]} and {plain:[d4],
+// wrappers:[adv]} — so each adv runs on its own dice instead of both
+// d6 and d4 getting twin-rolled together.
+interface ParsedSegment {
+  plain: PlainExpr;
+  wrappers: Wrapper[]; // innermost-first
+}
+interface ParsedExpr {
+  segments: ParsedSegment[];
+  // Flat dice + modifiers OUTSIDE every wrapper — e.g. the `+1d4` in
+  // `adv(1d20)+1d4` lands here so it rolls ONCE and is added to the
+  // adv-winner. Empty when the expression is fully wrapped.
+  outerPlain: PlainExpr;
+  // Backward-compat shims so existing code that reads `parsed.plain` /
+  // `parsed.wrappers` keeps working: filled from the FIRST segment if
+  // there's exactly one, else empty/empty. Refactor will eventually
+  // drop these.
+  plain: PlainExpr;
+  wrappers: Wrapper[];
+}
+
+const TERM_RE = /([+\-]?)(?:(\d*)d(\d+)|(\d+))/gi;
+
+function normalizeExpr(s: string): string {
+  return s
+    .replace(/[（]/g, "(")
+    .replace(/[）]/g, ")")
+    .replace(/[，]/g, ",")
+    .replace(/\s+/g, "");
+}
+
+function parsePlain(s: string): PlainExpr {
+  const groups: ExprGroup[] = [];
+  let modifier = 0;
+  if (!s) return { groups, modifier };
+  for (const m of s.matchAll(TERM_RE)) {
+    const sign = m[1] === "-" ? -1 : 1;
+    if (m[3] !== undefined) {
+      const count = (m[2] ? parseInt(m[2], 10) : 1) * sign;
+      const sides = parseInt(m[3], 10);
+      if (!sides || sides < 2 || sides > 1000) continue;
+      const type = `d${sides}`;
+      const ex = groups.find((g) => g.type === type);
+      if (ex) ex.count += count;
+      else groups.push({ type, count });
+    } else if (m[4] !== undefined) {
+      modifier += sign * parseInt(m[4], 10);
+    }
+  }
+  // Drop zero-count groups but PRESERVE negative-count ones — they
+  // represent subtraction dice (e.g. `1d20-1d6` keeps `{type:"d6",
+  // count:-1}` so rollPlainSet can roll it and stamp `subtract:true`
+  // on each die. Removed-from-total dice are still rolled + animated
+  // for the visual.
+  return { groups: groups.filter((g) => g.count !== 0), modifier };
+}
+
+// Split a string at the LAST top-level comma — so "1d20+5,2" splits
+// at the comma before the 2 (the +5 is inside the inner expr part).
+function topLevelLastComma(s: string): number {
+  let depth = 0;
+  let last = -1;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") depth = Math.max(0, depth - 1);
+    else if (s[i] === "," && depth === 0) last = i;
+  }
+  return last;
+}
+
+// Find the FIRST top-level comma — used by `repeat(N,...)` where the
+// count comes before the inner expression.
+function topLevelFirstComma(s: string): number {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") depth = Math.max(0, depth - 1);
+    else if (s[i] === "," && depth === 0) return i;
+  }
+  return -1;
+}
+
+// Split `s` into top-level additive terms, preserving each term's sign.
+// E.g. `adv(1d6)+adv(1d4)-2` → [{sign:+1, body:"adv(1d6)"},
+// {sign:+1, body:"adv(1d4)"}, {sign:-1, body:"2"}]. Wrapper-internal
+// `+` / `-` (inside parens) are ignored — depth-aware.
+function splitTopLevel(s: string): Array<{ sign: 1 | -1; body: string }> {
+  const out: Array<{ sign: 1 | -1; body: string }> = [];
+  if (!s) return out;
+  let depth = 0;
+  let start = 0;
+  let sign: 1 | -1 = 1;
+  // A leading sign on the whole string ("-1d4") sets the first term's sign.
+  if (s[0] === "+" || s[0] === "-") {
+    sign = s[0] === "-" ? -1 : 1;
+    start = 1;
+  }
+  for (let i = start; i <= s.length; i++) {
+    const c = i < s.length ? s[i] : "";
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && (i === s.length || c === "+" || c === "-")) {
+      const body = s.slice(start, i).trim();
+      if (body) out.push({ sign, body });
+      sign = c === "-" ? -1 : 1;
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+// Try to read a wrapper call at the START of `s` (i.e. `s` is exactly
+// `FUNC(...)` with maybe an outer modifier appended). Returns the
+// wrapper, its inner string, and whatever trailed after the closing
+// paren. Returns null if `s` doesn't start with a wrapper call OR the
+// parens are unbalanced.
+function readWrapperHead(s: string): {
+  wrapper: Wrapper;
+  inner: string;
+  tail: string;
+} | null {
+  const m = /^(adv|dis|max|min|resetmin|resetmax|reset|same|burst|repeat)\(/i.exec(s);
+  if (!m) return null;
+  const fnName = m[1].toLowerCase() as WrapperKind;
+  const innerStart = m[0].length;
+  let depth = 1;
+  let innerEnd = -1;
+  for (let i = innerStart; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") {
+      depth--;
+      if (depth === 0) { innerEnd = i; break; }
+    }
+  }
+  if (innerEnd < 0) return null;
+  const innerRaw = s.slice(innerStart, innerEnd);
+  const tail = s.slice(innerEnd + 1);
+  let wrapper: Wrapper;
+  let inner = innerRaw;
+  if (fnName === "adv" || fnName === "dis") {
+    let extraSets = 1;
+    const lastComma = topLevelLastComma(innerRaw);
+    if (lastComma >= 0) {
+      const t = innerRaw.slice(lastComma + 1);
+      if (/^\d+$/.test(t)) {
+        const n = parseInt(t, 10);
+        if (n > 0) {
+          inner = innerRaw.slice(0, lastComma);
+          extraSets = n;
+        }
+      }
+    }
+    wrapper = { kind: fnName, param: extraSets };
+  } else if (
+    fnName === "max" || fnName === "min" ||
+    fnName === "reset" || fnName === "resetmin" || fnName === "resetmax"
+  ) {
+    const lastComma = topLevelLastComma(innerRaw);
+    if (lastComma < 0) return null;
+    const t = innerRaw.slice(lastComma + 1);
+    if (!/^-?\d+$/.test(t)) return null;
+    wrapper = { kind: fnName, param: parseInt(t, 10) };
+    inner = innerRaw.slice(0, lastComma);
+  } else if (fnName === "repeat") {
+    const firstComma = topLevelFirstComma(innerRaw);
+    if (firstComma <= 0) return null;
+    const head = innerRaw.slice(0, firstComma);
+    if (!/^\d+$/.test(head)) return null;
+    const n = Math.max(1, Math.min(20, parseInt(head, 10) || 1));
+    wrapper = { kind: "repeat", param: n };
+    inner = innerRaw.slice(firstComma + 1);
+  } else {
+    wrapper = { kind: fnName }; // same / burst
+  }
+  return { wrapper, inner, tail };
+}
+
+// Apply `sign` to a PlainExpr — flips dice counts and modifier sign.
+// Used when a wrapped term has a leading minus, like `-adv(1d4)`.
+function negatePlain(p: PlainExpr): PlainExpr {
+  return {
+    groups: p.groups.map((g) => ({ type: g.type, count: g.count })).filter((g) => {
+      g.count = -g.count;
+      return g.count !== 0;
+    }),
+    modifier: -p.modifier,
+  };
+}
+
+// Merge `src` PlainExpr into `dst` (in place). Same-type dice sum.
+function mergePlain(dst: PlainExpr, src: PlainExpr): void {
+  for (const g of src.groups) {
+    const ex = dst.groups.find((x) => x.type === g.type);
+    if (ex) ex.count += g.count;
+    else dst.groups.push({ type: g.type, count: g.count });
+  }
+  dst.modifier += src.modifier;
+  dst.groups = dst.groups.filter((g) => g.count !== 0);
+}
+
+// LEGACY peelOne — replaced by `readWrapperHead` + `parseExprInner`.
+// Kept temporarily so I don't break unrelated callers in this commit;
+// nothing reaches it at runtime.
+function peelOne(s: string, outerOut?: PlainExpr): { wrapper: Wrapper; combined: string } | null {
+  // Find the first wrapper-call signature anywhere in the string.
+  const fnRe = /(adv|dis|max|min|resetmin|resetmax|reset|same|burst|repeat)\(/i;
+  const m = s.match(fnRe);
+  if (!m || m.index === undefined) return null;
+  const fnName = m[1].toLowerCase() as WrapperKind;
+  const fnStart = m.index;
+  const innerStart = fnStart + m[0].length;
+
+  // Walk to the matching close paren (depth-aware so nested wrappers
+  // don't trip us up).
+  let depth = 1;
+  let innerEnd = -1;
+  for (let i = innerStart; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") {
+      depth--;
+      if (depth === 0) { innerEnd = i; break; }
+    }
+  }
+  if (innerEnd < 0) return null;
+
+  const prefix = s.slice(0, fnStart);
+  const innerRaw = s.slice(innerStart, innerEnd);
+  const suffix = s.slice(innerEnd + 1);
+
+  let wrapper: Wrapper;
+  let inner = innerRaw;
+
+  if (fnName === "adv" || fnName === "dis") {
+    let extraSets = 1;
+    const lastComma = topLevelLastComma(innerRaw);
+    if (lastComma >= 0) {
+      const tail = innerRaw.slice(lastComma + 1);
+      if (/^\d+$/.test(tail)) {
+        const n = parseInt(tail, 10);
+        if (Number.isFinite(n) && n > 0) {
+          inner = innerRaw.slice(0, lastComma);
+          extraSets = n;
+        }
+      }
+    }
+    wrapper = { kind: fnName, param: extraSets };
+  } else if (
+    fnName === "max" || fnName === "min" ||
+    fnName === "reset" || fnName === "resetmin" || fnName === "resetmax"
+  ) {
+    const lastComma = topLevelLastComma(innerRaw);
+    if (lastComma < 0) return null;
+    const tail = innerRaw.slice(lastComma + 1);
+    if (!/^-?\d+$/.test(tail)) return null;
+    const value = parseInt(tail, 10);
+    if (!Number.isFinite(value)) return null;
+    wrapper = { kind: fnName, param: value };
+    inner = innerRaw.slice(0, lastComma);
+  } else if (fnName === "repeat") {
+    const firstComma = topLevelFirstComma(innerRaw);
+    if (firstComma <= 0) return null;
+    const head = innerRaw.slice(0, firstComma);
+    if (!/^\d+$/.test(head)) return null;
+    const n = Math.max(1, Math.min(20, parseInt(head, 10) || 1));
+    wrapper = { kind: "repeat", param: n };
+    inner = innerRaw.slice(firstComma + 1);
+  } else {
+    // same / burst — no params
+    wrapper = { kind: fnName };
+  }
+
+  // For adv/dis: extract dice from prefix/suffix into outerOut so they
+  // get rolled ONCE outside the advantage. Flat modifiers stay in the
+  // combined string (commutative with adv comparison). If prefix/suffix
+  // contain another wrapper call we leave them alone — the next peel
+  // iteration handles them; until then we don't risk corrupting nested
+  // wrapper syntax by stripping their internal dice.
+  if ((wrapper.kind === "adv" || wrapper.kind === "dis") && outerOut) {
+    const wrapperRe = /(adv|dis|max|min|resetmin|resetmax|reset|same|burst|repeat)\(/i;
+    const prefixHasWrapper = wrapperRe.test(prefix);
+    const suffixHasWrapper = wrapperRe.test(suffix);
+    let prefixOut = prefix;
+    let suffixOut = suffix;
+    const absorbInto = (frag: string): string => {
+      const p = parsePlain(frag);
+      for (const g of p.groups) {
+        const ex = outerOut.groups.find((x) => x.type === g.type);
+        if (ex) ex.count += g.count;
+        else outerOut.groups.push({ ...g });
+      }
+      // Drop the dice; reduce to a flat-modifier string so peel can
+      // continue working on the wrapper chain.
+      if (p.modifier > 0) return `+${p.modifier}`;
+      if (p.modifier < 0) return `${p.modifier}`;
+      return "";
+    };
+    if (!prefixHasWrapper) prefixOut = absorbInto(prefix);
+    if (!suffixHasWrapper) suffixOut = absorbInto(suffix);
+    const needsSep = prefixOut && !/[+\-]$/.test(prefixOut) && inner && !/^[+\-]/.test(inner);
+    const combined = prefixOut + (needsSep ? "+" : "") + inner + suffixOut;
+    return { wrapper, combined };
+  }
+
+  // Combine prefix + inner + suffix as the NEW expression to keep
+  // peeling. Prefix should already end with an operator (or be empty).
+  // Suffix should already start with an operator. If a sign-less prefix
+  // is followed by a sign-less inner, separate them with "+" so the
+  // plain parser doesn't run them together.
+  const needsSepBefore = prefix && !/[+\-]$/.test(prefix) && inner && !/^[+\-]/.test(inner);
+  const combined = prefix + (needsSepBefore ? "+" : "") + inner + suffix;
+  return { wrapper, combined };
+}
+
+// Top-down recursive parser. Splits at top-level `+` / `-`, and for
+// each term either:
+//   - reads a wrapper call FUNC(...) → recursively parses the inner,
+//     pushes this wrapper onto every inner segment's chain, and lifts
+//     any inner outer-plain into a NEW segment with this wrapper.
+//   - parses as a flat plain term → folded into outerPlain.
+//
+// Result: `segments[]` are independent wrapped dice chains, plus a
+// flat `outerPlain` for un-wrapped terms. Each segment rolls its dice
+// ONCE through its own wrapper chain, so `adv(1d6)+adv(1d4)` correctly
+// performs two independent advantage rolls.
+function parseExpr(raw: string): ParsedExpr {
+  const s = normalizeExpr(raw);
+  return finalizeParse(parseExprInner(s));
+}
+
+function parseExprInner(s: string): {
+  segments: ParsedSegment[];
+  outerPlain: PlainExpr;
+} {
+  const segments: ParsedSegment[] = [];
+  const outerPlain: PlainExpr = { groups: [], modifier: 0 };
+  if (!s) return { segments, outerPlain };
+
+  for (const term of splitTopLevel(s)) {
+    const head = readWrapperHead(term.body);
+    if (head) {
+      // Wrapped term. Recursively parse the inner, then push THIS
+      // wrapper onto every inner segment AND lift the inner outer-plain
+      // into its own segment under this wrapper.
+      const innerParsed = parseExprInner(head.inner);
+      // Inner outer-plain → fresh segment with [this wrapper] applied.
+      const innerOuter = innerParsed.outerPlain;
+      if (innerOuter.groups.length || innerOuter.modifier !== 0) {
+        const seg: ParsedSegment = {
+          plain: term.sign === -1 ? negatePlain(innerOuter) : innerOuter,
+          wrappers: [head.wrapper],
+        };
+        segments.push(seg);
+      }
+      // Each existing inner segment: push this wrapper at the END
+      // (outer-of-inner = applied later by rollExpr).
+      for (const innerSeg of innerParsed.segments) {
+        const seg: ParsedSegment = {
+          plain: term.sign === -1 ? negatePlain(innerSeg.plain) : innerSeg.plain,
+          wrappers: [...innerSeg.wrappers, head.wrapper],
+        };
+        segments.push(seg);
+      }
+      // Trailing modifier after the wrapper, e.g. `adv(1d20)+5` has
+      // tail "+5" — fold into outerPlain.
+      if (head.tail) {
+        const tailParsed = parsePlain(head.tail);
+        if (term.sign === -1) {
+          // Sign on the wrapped term ALSO flips its tail.
+          tailParsed.modifier = -tailParsed.modifier;
+          for (const g of tailParsed.groups) g.count = -g.count;
+        }
+        mergePlain(outerPlain, tailParsed);
+      }
+    } else {
+      // Flat plain term (NdM or number). Apply sign and fold into
+      // outerPlain.
+      const signed = term.sign === -1 ? `-${term.body}` : term.body;
+      const plain = parsePlain(signed);
+      mergePlain(outerPlain, plain);
+    }
+  }
+
+  return { segments, outerPlain };
+}
+
+// Strip empty-zero entries + populate the backward-compat shims.
+function finalizeParse(p: {
+  segments: ParsedSegment[];
+  outerPlain: PlainExpr;
+}): ParsedExpr {
+  // Drop segments whose plain has no dice and no modifier — happens
+  // when an empty wrapper inner gets pushed.
+  const segments = p.segments.filter(
+    (seg) => seg.plain.groups.length > 0 || seg.plain.modifier !== 0,
+  );
+  const outerPlain = p.outerPlain;
+  // Backward-compat shim: legacy callers read `parsed.plain` and
+  // `parsed.wrappers`. If there's exactly ONE segment, surface it; if
+  // there's none, surface outerPlain so simple `1d20+5`-style
+  // expressions still look "wrapper-less" to old code paths.
+  let plain: PlainExpr;
+  let wrappers: Wrapper[];
+  if (segments.length === 1) {
+    plain = segments[0].plain;
+    wrappers = segments[0].wrappers;
+  } else if (segments.length === 0) {
+    plain = outerPlain;
+    wrappers = [];
+  } else {
+    plain = { groups: [], modifier: 0 };
+    wrappers = [];
+  }
+  return { segments, outerPlain, plain, wrappers };
+}
+
+function rollDieType(type: string): number {
+  return Math.floor(Math.random() * sidesOf(type)) + 1;
+}
+
+function rollPlainSet(plain: PlainExpr): DieResult[] {
+  const dice: DieResult[] = [];
+  for (const g of plain.groups) {
+    // Negative-count groups represent SUBTRACTION dice (1d20-1d6 →
+    // group {d6, count:-1}). Roll the same number of physical dice
+    // but mark each as `subtract:true` so totals subtract the value
+    // and the visual renders them at lower opacity.
+    const isSubtract = g.count < 0;
+    const n = Math.abs(g.count);
+    for (let i = 0; i < n; i++) {
+      const die: DieResult = { type: g.type as DiceType, value: rollDieType(g.type) };
+      if (isSubtract) die.subtract = true;
+      dice.push(die);
+    }
+  }
+  return dice;
+}
+
+function formatPlain(p: PlainExpr): string {
+  // 2026-05-10: stitch with separate `+`/`-` separators so negative
+  // counts render as `... - 1d4` instead of `... + -1d4`. First term
+  // keeps its native sign (`-1d4` if it leads, `1d20` otherwise).
+  let s = "";
+  p.groups.forEach((g, i) => {
+    if (i === 0) {
+      s = `${g.count}${g.type}`;
+    } else if (g.count < 0) {
+      s += ` - ${Math.abs(g.count)}${g.type}`;
+    } else {
+      s += ` + ${g.count}${g.type}`;
+    }
+  });
+  if (p.modifier > 0) s += `${s ? " + " : ""}${p.modifier}`;
+  else if (p.modifier < 0) s += `${s ? " " : ""}${p.modifier}`;
+  return s || "—";
+}
+
+function formatSegment(seg: ParsedSegment): string {
+  let body = formatPlain(seg.plain);
+  for (const w of seg.wrappers) {
+    switch (w.kind) {
+      case "adv":
+      case "dis":
+        body = w.param && w.param > 1
+          ? `${w.kind}(${body},${w.param})`
+          : `${w.kind}(${body})`;
+        break;
+      case "max":
+      case "min":
+      case "reset":
+      case "resetmin":
+      case "resetmax":
+        body = `${w.kind}(${body},${w.param ?? 0})`;
+        break;
+      case "same":
+      case "burst":
+        body = `${w.kind}(${body})`;
+        break;
+      case "repeat":
+        body = `repeat(${w.param ?? 1},${body})`;
+        break;
+    }
+  }
+  return body;
+}
+
+// Stitch all segments + outerPlain into a readable string. Order:
+// segments first (preserving the order they appeared in the input)
+// then any outer plain. Each piece is joined with ` + ` / ` - ` based
+// on the leading sign of its formatted body.
+function formatExpr(p: ParsedExpr): string {
+  const pieces: string[] = [];
+  for (const seg of p.segments) {
+    const s = formatSegment(seg);
+    if (s && s !== "—") pieces.push(s);
+  }
+  const outer = p.outerPlain ? formatPlain(p.outerPlain) : "";
+  if (outer && outer !== "—") pieces.push(outer);
+  if (pieces.length === 0) return "—";
+  // Join with ` + ` — formatPlain already inserts leading "-" for
+  // negative modifiers, so we just splice with " + " and the user sees
+  // "adv(1d20) + -1" → not pretty. Fix by detecting leading "-".
+  let out = pieces[0];
+  for (let i = 1; i < pieces.length; i++) {
+    const next = pieces[i];
+    if (next.startsWith("-")) out += ` ${next}`;
+    else out += ` + ${next}`;
+  }
+  return out;
+}
+
+// Apply max/min/reset/resetmin/resetmax to a single die value. Stamps
+// originalValue if the value actually changed so the visual can
+// render "new(orig)".
+//
+// Semantics:
+//   max(d, X)       — value bumped UP to at least X (floor)
+//   min(d, X)       — value capped DOWN to at most X (ceiling)
+//   reset(d, X)     — TRIGGERED reroll: if rolled value EQUALS X,
+//                      reroll once and use the reroll.
+//   resetmin(d, X)  — TRIGGERED reroll: if rolled value <= X,
+//                      reroll once and use the reroll.
+//   resetmax(d, X)  — TRIGGERED reroll: if rolled value >= X,
+//                      reroll once and use the reroll.
+function applyValueClamp(
+  d: DieResult,
+  kind: "max" | "min" | "reset" | "resetmin" | "resetmax",
+  X: number,
+): DieResult {
+  if (d.loser) return d;     // discarded set is preserved as-rolled
+  if (kind === "reset" || kind === "resetmin" || kind === "resetmax") {
+    const triggers =
+      kind === "reset" ? d.value === X :
+      kind === "resetmin" ? d.value <= X :
+      d.value >= X;
+    if (!triggers) return d;
+    const sides = sidesOf(d.type);
+    const newVal = Math.floor(Math.random() * sides) + 1;
+    if (newVal === d.value) return d;
+    return { ...d, originalValue: d.originalValue ?? d.value, value: newVal };
+  }
+  let nv = d.value;
+  if (kind === "max") nv = Math.max(d.value, X);
+  else if (kind === "min") nv = Math.min(d.value, X);
+  if (nv === d.value) return d;
+  return { ...d, originalValue: d.originalValue ?? d.value, value: nv };
+}
+
+// Recursively roll one instance of (plain + the given wrapper chain).
+// Wrappers are innermost-first, applied in order. adv/dis are special:
+// they recurse to roll the INNER chain multiple times, then pick a
+// winning set and mark losers.
+function rollExpr(plain: PlainExpr, wrappers: Wrapper[]): { dice: DieResult[]; winnerIdx: number } {
+  if (wrappers.length === 0) {
+    return { dice: rollPlainSet(plain), winnerIdx: -1 };
+  }
+  const outer = wrappers[wrappers.length - 1];
+  const inner = wrappers.slice(0, -1);
+
+  // adv / dis — expand: roll the inner chain N+1 times, pick winner.
+  if (outer.kind === "adv" || outer.kind === "dis") {
+    const setsCount = (outer.param ?? 1) + 1;
+    const sets: { dice: DieResult[]; sum: number }[] = [];
+    for (let i = 0; i < setsCount; i++) {
+      const r = rollExpr(plain, inner);
+      sets.push({ dice: r.dice, sum: r.dice.reduce((a, d) => a + d.value, 0) });
+    }
+    let winSetIdx = 0;
+    for (let i = 1; i < sets.length; i++) {
+      if (outer.kind === "adv" && sets[i].sum > sets[winSetIdx].sum) winSetIdx = i;
+      else if (outer.kind === "dis" && sets[i].sum < sets[winSetIdx].sum) winSetIdx = i;
+    }
+    const dice: DieResult[] = [];
+    for (let i = 0; i < sets.length; i++) {
+      const isLoser = i !== winSetIdx;
+      for (const d of sets[i].dice) dice.push(isLoser ? { ...d, loser: true } : d);
+    }
+    let winnerIdx = -1;
+    if (sets[winSetIdx].dice.length === 1) {
+      let idx = 0;
+      for (let i = 0; i < winSetIdx; i++) idx += sets[i].dice.length;
+      winnerIdx = idx;
+    }
+    return { dice, winnerIdx };
+  }
+
+  // Non-expanding wrappers: recurse first, then transform.
+  const innerResult = rollExpr(plain, inner);
+  let dice = innerResult.dice;
+  let winnerIdx = innerResult.winnerIdx;
+
+  if (
+    outer.kind === "max" || outer.kind === "min" ||
+    outer.kind === "reset" || outer.kind === "resetmin" || outer.kind === "resetmax"
+  ) {
+    const X = outer.param ?? 1;
+    dice = dice.map((d) =>
+      applyValueClamp(d, outer.kind as "max" | "min" | "reset" | "resetmin" | "resetmax", X),
+    );
+  } else if (outer.kind === "burst") {
+    const out: DieResult[] = [];
+    for (const d of dice) {
+      const parentIdxInOut = out.length;
+      out.push(d);
+      if (d.loser) continue;
+      const sides = sidesOf(d.type);
+      let lastValue = d.value;
+      let lastIdxInOut = parentIdxInOut;
+      let chain = 0;
+      while (lastValue === sides && chain < 5) {
+        // Record the index of the die that triggered THIS new one so
+        // the visual can play parent → child fly-in animations along
+        // the chain. burstParent indexes into the OUTPUT array so it
+        // remains valid through subsequent wrapper insertions.
+        const next: DieResult = {
+          type: d.type,
+          value: rollDieType(d.type),
+          burstParent: lastIdxInOut,
+        };
+        out.push(next);
+        lastIdxInOut = out.length - 1;
+        lastValue = next.value;
+        chain++;
+      }
+    }
+    dice = out;
+    // Burst inserts dice between original ones — winnerIdx invalidated.
+    winnerIdx = -1;
+  }
+  // "same" is a visual-only flag, no value transform.
+
+  return { dice, winnerIdx };
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+// --- Owner-aware target-token resolution ---
+//
+// Per user spec: focus the dice on a token if there's exactly one
+// reasonable candidate. Priority:
+//   1. Currently selected (if exactly one selected)
+//   2. Visible character-layer item owned (createdUserId matches) by
+//      the current player — but ONLY if there's exactly one such item.
+async function findFocusTokenId(): Promise<string | null> {
+  try {
+    const sel = await OBR.player.getSelection();
+    if (sel && sel.length === 1) return sel[0];
+  } catch {}
+  try {
+    const myId = await OBR.player.getId();
+    const items = await OBR.scene.items.getItems(
+      (it: any) =>
+        it.type === "IMAGE" &&
+        (it.layer === "CHARACTER" || it.layer === "MOUNT") &&
+        it.visible &&
+        it.createdUserId === myId
+    );
+    if (items.length === 1) return items[0].id;
+  } catch {}
+  return null;
+}
+
+// --- Lock state ---
+
+function setLocked(locked: boolean) {
+  isAnimating = locked;
+  btnForceClr.classList.toggle("on", locked);
+}
+// Shake any button red and (optionally) replace its label with a brief
+// failure reason. The original label is restored after the animation
+// so the button is reusable. Used by both the panel's main 投掷 button
+// and per-card combo 投掷 buttons.
+const SHAKE_MS = 700;
+function shakeButtonWithReason(btn: HTMLButtonElement, reason?: string): void {
+  btn.classList.remove("shake-red");
+  void btn.offsetWidth;
+  btn.classList.add("shake-red");
+  if (reason) {
+    if (btn.dataset.origLabel === undefined) {
+      btn.dataset.origLabel = btn.textContent ?? "";
+    }
+    btn.textContent = reason;
+  }
+  setTimeout(() => {
+    btn.classList.remove("shake-red");
+    if (btn.dataset.origLabel !== undefined) {
+      btn.textContent = btn.dataset.origLabel;
+      delete btn.dataset.origLabel;
+    }
+  }, SHAKE_MS);
+}
+// Backwards-compat shorthand for the main panel button.
+function flashRollButtonRed(reason?: string) {
+  shakeButtonWithReason(btnRoll, reason);
+}
+function forceClear() {
+  if (animationTimer !== null) {
+    clearTimeout(animationTimer);
+    animationTimer = null;
+  }
+  setLocked(false);
+  OBR.broadcast.sendMessage(BC_DICE_FORCE_CLEAR, {}, { destination: "LOCAL" }).catch(() => {});
+  OBR.broadcast.sendMessage(BC_DICE_FORCE_CLEAR, {}, { destination: "REMOTE" }).catch(() => {});
+}
+
+// --- Dice button click adjusts expression (left=+1, right=-1) ---
+
+function adjustExprForType(type: DiceType, delta: number) {
+  const parsed = parseExpr(expression);
+  // Add to outerPlain — outside any wrapper. Each click of a die
+  // button always lands as a free-standing additive term so the user
+  // can stack `adv(1d20) + 1d6` by clicking adv then d6 etc.
+  //
+  // 2026-05-10: right-click on a die button now ALSO supports going
+  // BELOW zero — if there's no existing entry of `type`, a `-1d{type}`
+  // term is added (decrement). Use case: building an expression like
+  // `2d20 - 1d4` where the d4 has no positive sibling. Previous
+  // behaviour silently dropped the click when count <= 0 (legacy
+  // "right-click only removes existing").
+  const dst = parsed.outerPlain;
+  const ex = dst.groups.find((g) => g.type === type);
+  if (ex) {
+    ex.count += delta;
+    // Drop the group entirely only when count lands at 0 (clean
+    // toggle off). Negative counts stay — formatPlain renders e.g.
+    // -1d4 as "-1d4" and the rest of the parser reads it correctly
+    // on the next round-trip.
+    if (ex.count === 0) dst.groups = dst.groups.filter((g) => g !== ex);
+  } else {
+    // No existing entry — push with the requested delta directly.
+    // delta may be -1 (right-click) or +1 (left-click). +0 is a no-op.
+    if (delta !== 0) dst.groups.push({ type, count: delta });
+  }
+  setExpression(formatExpr(parsed));
+}
+
+// Bump the flat numeric modifier in the expression by `delta`. The
+// modifier always lives on the INNER plain (under any adv/dis/max/...
+// wrapper) — that's where peelOne already absorbs flat-number suffixes
+// like the +5 in `adv(1d20)+5`, and it formats cleanly back into the
+// inner. Empty expression starts at 0.
+function adjustExprModifier(delta: number) {
+  const parsed = parseExpr(expression);
+  // Add to outerPlain — that's the unambiguous "outside any wrapper"
+  // bucket. For a plain `1d20+5` (no wrapper, single segment) this
+  // adjusts the segment's own modifier via the backward-compat shim;
+  // for multi-segment / wrapped expressions the modifier shows up as
+  // a trailing `+ N` after the wrapped parts, which is the right
+  // behavior (it doesn't get advantage-doubled).
+  if (parsed.segments.length === 0) {
+    parsed.outerPlain.modifier += delta;
+  } else {
+    parsed.outerPlain.modifier += delta;
+  }
+  setExpression(formatExpr(parsed));
+}
+
+// Total modifier across all segments + outer. Used for empty-checks
+// and for the single-number `modifier` field in the broadcast payload.
+function totalModifier(p: ParsedExpr): number {
+  let m = p.outerPlain.modifier;
+  for (const seg of p.segments) m += seg.plain.modifier;
+  return m;
+}
+
+function exprIsEmpty(p: ParsedExpr): boolean {
+  if (p.outerPlain.groups.length || p.outerPlain.modifier !== 0) return false;
+  for (const seg of p.segments) {
+    if (seg.plain.groups.length || seg.plain.modifier !== 0) return false;
+  }
+  return true;
+}
+
+function setExpression(v: string) {
+  expression = v === "—" ? "" : v;
+  exprInput.value = expression;
+  refreshBadges();
+}
+
+function refreshBadges() {
+  const parsed = parseExpr(expression);
+  const counts: Record<string, number> = {};
+  // Count from the canonical sources only — segments + outerPlain. The
+  // backward-compat shim aliases `parsed.plain` to `outerPlain` when
+  // there are zero segments, so reading both `plain` and `outerPlain`
+  // would double-count plain expressions like "1d20" → badge showed 2.
+  for (const seg of parsed.segments) {
+    for (const g of seg.plain.groups) counts[g.type] = (counts[g.type] ?? 0) + g.count;
+  }
+  for (const g of parsed.outerPlain.groups) counts[g.type] = (counts[g.type] ?? 0) + g.count;
+  diceRow.querySelectorAll<HTMLElement>(".dice-btn[data-type]").forEach((b) => {
+    const t = b.dataset.type!;
+    const c = counts[t] ?? 0;
+    b.dataset.count = String(c);
+    const badge = b.querySelector<HTMLSpanElement>(".badge");
+    if (badge) badge.textContent = String(c);
+  });
+}
+
+// --- Combos / History rendering ---
+
+// Group combos by category, returning [category, combos[]] pairs in
+// the user-defined `categoryOrder` sequence. Uncategorized combos
+// always render first under the empty-string key.
+function groupCombosByCategory(): Array<{ key: string; label: string; items: SavedCombo[] }> {
+  // Bucketize. Preserve in-array order inside each bucket — that's
+  // what the drag-reorder writes back, so the rendered order matches
+  // the persisted order without extra sorting.
+  const buckets = new Map<string, SavedCombo[]>();
+  for (const c of combos) {
+    const key = (c.category ?? "").trim();
+    let arr = buckets.get(key);
+    if (!arr) { arr = []; buckets.set(key, arr); }
+    arr.push(c);
+  }
+  const out: Array<{ key: string; label: string; items: SavedCombo[] }> = [];
+  // Uncategorized first (if any combos lack a category).
+  if (buckets.has(UNCATEGORIZED_KEY)) {
+    out.push({
+      key: UNCATEGORIZED_KEY,
+      label: tt("diceComboCatUncategorized"),
+      items: buckets.get(UNCATEGORIZED_KEY)!,
+    });
+    buckets.delete(UNCATEGORIZED_KEY);
+  }
+  // Then in user-defined order.
+  for (const cat of categoryOrder) {
+    if (!buckets.has(cat)) {
+      // Empty category — still render the section so the user can
+      // see the header (and drop combos into it).
+      out.push({ key: cat, label: cat, items: [] });
+      continue;
+    }
+    out.push({ key: cat, label: cat, items: buckets.get(cat)! });
+    buckets.delete(cat);
+  }
+  // Any leftovers — categories referenced by combos but not in the
+  // ordered list. Append in alphabetical order.
+  const remaining = Array.from(buckets.keys()).sort();
+  for (const cat of remaining) {
+    out.push({ key: cat, label: cat, items: buckets.get(cat)! });
+  }
+  return out;
+}
+
+function renderCombos() {
+  // DM-only 暗骰 button — same gating as the main panel's dark-roll.
+  const darkBtn = isDM
+    ? `<button class="btn dark-roll combo-dark" data-act="roll-dark" type="button">${tt("diceComboBtnDark")}</button>`
+    : "";
+
+  const groups = groupCombosByCategory();
+  const hasAny = groups.some((g) => g.items.length > 0) || categoryOrder.length > 0;
+
+  // Toolbar across the top of the combos tab — drag hint + add-category
+  // button. Always rendered (even when empty) so a fresh user can
+  // create a category before saving any combos.
+  const toolbar = `
+    <div class="combo-toolbar">
+      <span class="combo-hint">${tt("diceComboDragHint")}</span>
+      <button class="btn small" id="combo-add-cat" type="button">${tt("diceComboCatNew")}</button>
+    </div>
+  `;
+
+  if (!hasAny) {
+    comboList.innerHTML = toolbar +
+      `<div class="empty-state">${tt("diceComboEmpty")}</div>`;
+    wireToolbar();
+    return;
+  }
+
+  const sectionsHtml = groups.map((g) => {
+    const cards = g.items.map((c) => {
+      const formula = formatExpr(parseExpr(c.expr));
+      return `
+        <div class="combo-card" data-id="${escapeHtml(c.id)}" data-cat="${escapeHtml(g.key)}" draggable="true">
+          <div class="combo-card-head">
+            <span class="combo-grip" title="${tt("diceComboDragHint")}" aria-hidden="true">⋮⋮</span>
+            <span class="combo-name">${escapeHtml(c.name)}</span>
+          </div>
+          <div class="combo-formula">${escapeHtml(formula)}</div>
+          <div class="combo-actions">
+            <button class="btn primary" data-act="roll" type="button">${tt("diceComboBtnRoll")}</button>
+            ${darkBtn}
+            <button class="btn combo-crit" data-act="roll-crit" type="button" title="${tt("diceTitleCrit")}">${tt("diceComboBtnCrit")}</button>
+            <button class="btn" data-act="load" type="button">${tt("diceComboBtnEdit")}</button>
+            <button class="btn danger" data-act="del" type="button">${tt("diceComboBtnDel")}</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+    // Categories other than uncategorized get rename/delete affordances
+    // on the header. The uncategorized header is always present for
+    // its label only — no rename / delete (it's the implicit fallback).
+    const headerActions = g.key === UNCATEGORIZED_KEY ? "" : `
+      <button class="cat-act" data-act="rename" type="button" title="${tt("diceComboCatRename")}">✎</button>
+      <button class="cat-act" data-act="del-cat" type="button" title="${tt("diceComboCatDelete")}">✕</button>
+    `;
+    return `
+      <div class="combo-section" data-cat="${escapeHtml(g.key)}">
+        <div class="combo-section-head">
+          <span class="combo-section-title">${escapeHtml(g.label)}</span>
+          <span class="combo-section-count">${g.items.length}</span>
+          ${headerActions}
+        </div>
+        <div class="combo-section-body" data-cat="${escapeHtml(g.key)}">${cards || `<div class="combo-empty-drop">—</div>`}</div>
+      </div>
+    `;
+  }).join("");
+
+  comboList.innerHTML = toolbar + sectionsHtml;
+  wireToolbar();
+  wireCardActions();
+  wireDragAndDrop();
+}
+
+function wireToolbar() {
+  const addBtn = document.getElementById("combo-add-cat");
+  if (!addBtn) return;
+  addBtn.addEventListener("click", () => {
+    const name = window.prompt(tt("diceComboCatNewPrompt"), "");
+    if (!name) return;
+    const trimmed = name.trim().slice(0, 32);
+    if (!trimmed) return;
+    if (!categoryOrder.includes(trimmed)) categoryOrder.push(trimmed);
+    saveCombos();
+    renderCombos();
+  });
+}
+
+function wireCardActions() {
+  comboList.querySelectorAll<HTMLButtonElement>(".combo-card .combo-actions button").forEach((b) => {
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const card = b.closest(".combo-card") as HTMLElement;
+      const id = card.dataset.id!;
+      const c = combos.find((x) => x.id === id);
+      if (!c) return;
+      const act = b.dataset.act;
+      if (act === "roll") {
+        // Honour DM's 全局暗骰 toggle on the normal-roll path. The
+        // explicit 暗骰 button below always rolls hidden regardless.
+        rollFromCombo(c.expr, c.name, { hidden: getGlobalDarkRoll() }, b);
+      } else if (act === "roll-dark") {
+        rollFromCombo(c.expr, c.name, { hidden: true }, b);
+      } else if (act === "roll-crit") {
+        // 重击 — double dice counts in the combo's saved expression
+        // before rolling. Pure pre-roll text transform; the combo's
+        // stored expression isn't mutated. Also honours 全局暗骰.
+        const critExpr = doubleDiceCounts(c.expr);
+        rollFromCombo(critExpr, c.name, { hidden: getGlobalDarkRoll() }, b);
+      } else if (act === "load") {
+        setExpression(c.expr);
+        labelText = c.name;
+        labelInput.value = labelText;
+        switchTab("roll");
+      } else if (act === "del") {
+        combos = combos.filter((x) => x.id !== id);
+        saveCombos();
+        renderCombos();
+      }
+    });
+  });
+  // Header rename / delete-category actions.
+  comboList.querySelectorAll<HTMLButtonElement>(".combo-section .cat-act").forEach((b) => {
+    b.addEventListener("click", () => {
+      const section = b.closest(".combo-section") as HTMLElement;
+      const cat = section.dataset.cat!;
+      const act = b.dataset.act;
+      if (act === "rename") {
+        const next = window.prompt(tt("diceComboCatRenamePrompt"), cat);
+        if (!next) return;
+        const trimmed = next.trim().slice(0, 32);
+        if (!trimmed || trimmed === cat) return;
+        for (const c of combos) if (c.category === cat) c.category = trimmed;
+        const idx = categoryOrder.indexOf(cat);
+        if (idx >= 0) {
+          categoryOrder[idx] = trimmed;
+        } else {
+          categoryOrder.push(trimmed);
+        }
+        // Dedup in case rename collided with an existing category.
+        categoryOrder = categoryOrder.filter(
+          (v, i, arr) => arr.indexOf(v) === i,
+        );
+        saveCombos();
+        renderCombos();
+      } else if (act === "del-cat") {
+        for (const c of combos) if (c.category === cat) c.category = undefined;
+        categoryOrder = categoryOrder.filter((v) => v !== cat);
+        saveCombos();
+        renderCombos();
+      }
+    });
+  });
+}
+
+// HTML5 drag-and-drop. dragstart fires on the combo-card, dragover
+// computes the insertion index based on the cursor's vertical
+// position relative to siblings, and drop reorders + persists.
+// Cross-section drag changes the combo's category to the drop
+// target's section.
+function wireDragAndDrop() {
+  let draggedId: string | null = null;
+  comboList.querySelectorAll<HTMLElement>(".combo-card").forEach((card) => {
+    card.addEventListener("dragstart", (e) => {
+      draggedId = card.dataset.id!;
+      card.classList.add("dragging");
+      try {
+        e.dataTransfer?.setData("text/plain", draggedId);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      } catch {}
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      draggedId = null;
+      comboList.querySelectorAll<HTMLElement>(".combo-card.drop-before").forEach(
+        (n) => n.classList.remove("drop-before"),
+      );
+      comboList.querySelectorAll<HTMLElement>(".combo-section.drop-target").forEach(
+        (n) => n.classList.remove("drop-target"),
+      );
+    });
+  });
+  comboList.querySelectorAll<HTMLElement>(".combo-section-body").forEach((body) => {
+    body.addEventListener("dragover", (e) => {
+      if (!draggedId) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      const section = body.closest(".combo-section") as HTMLElement;
+      section?.classList.add("drop-target");
+      // Highlight the card we'd drop BEFORE so the user can preview
+      // the insertion. Walk siblings to find the first one whose
+      // midpoint is below the cursor.
+      body.querySelectorAll<HTMLElement>(".combo-card.drop-before").forEach(
+        (n) => n.classList.remove("drop-before"),
+      );
+      const cards = Array.from(body.querySelectorAll<HTMLElement>(".combo-card"));
+      const y = e.clientY;
+      const target = cards.find((c) => {
+        const r = c.getBoundingClientRect();
+        return y < r.top + r.height / 2;
+      });
+      if (target && target.dataset.id !== draggedId) {
+        target.classList.add("drop-before");
+      }
+    });
+    body.addEventListener("dragleave", (e) => {
+      const section = body.closest(".combo-section") as HTMLElement;
+      // Only clear if the cursor truly left the section, not just
+      // moved between children. relatedTarget check guards that.
+      const rt = e.relatedTarget as Node | null;
+      if (!section || (rt && section.contains(rt))) return;
+      section.classList.remove("drop-target");
+      body.querySelectorAll<HTMLElement>(".combo-card.drop-before").forEach(
+        (n) => n.classList.remove("drop-before"),
+      );
+    });
+    body.addEventListener("drop", (e) => {
+      if (!draggedId) return;
+      e.preventDefault();
+      const section = body.closest(".combo-section") as HTMLElement;
+      const targetCat = body.dataset.cat ?? "";
+      const movedIdx = combos.findIndex((c) => c.id === draggedId);
+      if (movedIdx < 0) return;
+      const moved = combos[movedIdx];
+
+      // Determine insertion position within the bucket.
+      const cards = Array.from(body.querySelectorAll<HTMLElement>(".combo-card"));
+      const y = e.clientY;
+      let insertBeforeId: string | null = null;
+      for (const c of cards) {
+        if (c.dataset.id === draggedId) continue;
+        const r = c.getBoundingClientRect();
+        if (y < r.top + r.height / 2) {
+          insertBeforeId = c.dataset.id ?? null;
+          break;
+        }
+      }
+      // Apply category change first.
+      moved.category = targetCat || undefined;
+      // Splice out, then splice into the new position relative to the
+      // CURRENT array (after removal).
+      combos.splice(movedIdx, 1);
+      let insertAt: number;
+      if (insertBeforeId) {
+        insertAt = combos.findIndex((c) => c.id === insertBeforeId);
+        if (insertAt < 0) insertAt = combos.length;
+      } else {
+        // Drop at end of the target bucket: find last index whose
+        // category matches targetCat, insert just after it. If none,
+        // append at the very end.
+        let lastInBucket = -1;
+        for (let i = 0; i < combos.length; i++) {
+          if ((combos[i].category ?? "") === targetCat) lastInBucket = i;
+        }
+        insertAt = lastInBucket + 1;
+        if (insertAt < 0) insertAt = combos.length;
+      }
+      combos.splice(insertAt, 0, moved);
+
+      saveCombos();
+      section?.classList.remove("drop-target");
+      renderCombos();
+    });
+  });
+}
+
+function renderHistorySeg() {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const h of visibleHistory()) {
+    if (!seen.has(h.rollerName)) {
+      seen.add(h.rollerName);
+      names.push(h.rollerName);
+    }
+  }
+  const buttons: string[] = [
+    `<button class="seg-btn ${historyFilter === "" ? "on" : ""}" data-p="" type="button">${tt("diceHistoryAll")}</button>`,
+  ];
+  for (const n of names) {
+    const isOn = historyFilter === n;
+    buttons.push(
+      `<button class="seg-btn ${isOn ? "on" : ""}" data-p="${escapeHtml(n)}" type="button">${escapeHtml(n)}</button>`
+    );
+  }
+  historySeg.innerHTML = buttons.join("");
+  historySeg.querySelectorAll<HTMLButtonElement>(".seg-btn").forEach((b) => {
+    b.addEventListener("click", () => {
+      historyFilter = b.dataset.p ?? "";
+      renderHistorySeg();
+      renderHistoryList();
+    });
+  });
+}
+
+// === History rendering helpers ============================================
+//
+// These mirror the bottom-right history modal's renderers (history-page.ts).
+// Goal: identical visual vocabulary in both UIs — dice as PNG icons inside
+// pill-shaped chips, collective rolls collapsed into a member-strip with
+// one card per token, repeat rolls into a flow-wrap repeat-strip, solo
+// rolls as a single formula line. Each rendered block is an `.entry`
+// container with a roller-color-bound left border + click target wired to
+// BC_DICE_REPLAY (handled by the panel's historyList click delegate).
+
+const STANDARD_DIE_TYPES = new Set(["d4", "d6", "d8", "d10", "d12", "d20", "d100"]);
+function dieImgUrl(type: string): string {
+  return assetUrl(`${STANDARD_DIE_TYPES.has(type) ? type : "d100"}.png`);
+}
+
+function chipsHtml(dice: DieResult[]): string {
+  const parts: string[] = [];
+  for (const d of dice) {
+    const sides = sidesOf(d.type);
+    const cls =
+      d.loser ? "loser" :
+      d.value === sides ? "crit" :
+      d.value === 1 ? "fail" : "";
+    const subtractCls = d.subtract ? " subtract" : "";
+    const valueStr = d.subtract ? `−${d.value}` : String(d.value);
+    parts.push(
+      `<span class="die-chip ${cls}${subtractCls}">` +
+      `<img src="${dieImgUrl(d.type)}" alt="${escapeHtml(d.type)}" draggable="false">` +
+      `<span>${valueStr}</span>` +
+      `</span>`,
+    );
+  }
+  return parts.join("");
+}
+
+function buildFormulaInner(entry: DiceRollPayload, showLabel = true): string {
+  const chips = chipsHtml(entry.dice);
+  let modStr = "";
+  if (entry.modifier !== 0) {
+    const N = entry.rowStarts?.length ?? 0;
+    const sign = entry.modifier > 0 ? "+" : "";
+    modStr = N > 1
+      ? `<span class="mod">${sign}${entry.modifier}×${N}</span>`
+      : `<span class="mod">${sign}${entry.modifier}</span>`;
+  }
+  const repeatTag = (entry.rowStarts?.length ?? 0) > 1
+    ? `<span class="label-tag" style="background:rgba(93,173,226,0.18);color:#9ad9ff">repeat×${entry.rowStarts!.length}</span>`
+    : "";
+  const labelStr = showLabel && entry.label
+    ? `<span class="label-tag">${escapeHtml(entry.label)}</span>`
+    : "";
+  const list = `<div class="dice-list">${repeatTag}${chips}${modStr}${labelStr}<span class="eq">=</span></div>`;
+  const total = `<span class="total">${entry.total}</span>`;
+  return list + total;
+}
+
+function buildMemberCard(m: DiceRollPayload): string {
+  const chips = chipsHtml(m.dice);
+  const modStr = m.modifier !== 0
+    ? `<span class="mod">${m.modifier > 0 ? `+${m.modifier}` : m.modifier}</span>`
+    : "";
+  const kept = m.dice.filter((d) => !d.loser);
+  const isCrit = kept.some((d) => d.type === "d20" && d.value === 20);
+  const isFail = kept.some((d) => d.type === "d20" && d.value === 1);
+  const cardCls = ["member-card"];
+  if (isCrit) cardCls.push("crit");
+  else if (isFail) cardCls.push("fail");
+  if (m.hidden) cardCls.push("hidden-roll");
+  return `<div class="${cardCls.join(" ")}" data-rollid="${escapeHtml(m.rollId)}" data-cid="${escapeHtml(m.collectiveId ?? m.rollId)}">${chips}${modStr}<span class="eq">=</span><span class="total">${m.total}</span></div>`;
+}
+
+function buildMemberStripHtml(members: DiceRollPayload[]): string {
+  return `<div class="member-strip">${members.map(buildMemberCard).join("")}</div>`;
+}
+
+function buildRepeatRowCard(entry: DiceRollPayload, rowIdx: number, rowDice: DieResult[], rowTotal: number): string {
+  const chips = chipsHtml(rowDice);
+  const modStr = entry.modifier !== 0
+    ? `<span class="mod">${entry.modifier > 0 ? `+${entry.modifier}` : entry.modifier}</span>`
+    : "";
+  const kept = rowDice.filter((d) => !d.loser);
+  const isCrit = kept.some((d) => d.type === "d20" && d.value === 20);
+  const isFail = kept.some((d) => d.type === "d20" && d.value === 1);
+  const cls = ["member-card"];
+  if (isCrit) cls.push("crit");
+  else if (isFail) cls.push("fail");
+  if (entry.hidden) cls.push("hidden-roll");
+  return (
+    `<div class="${cls.join(" ")}" data-rollid="${escapeHtml(entry.rollId)}" data-cid="${escapeHtml(entry.collectiveId ?? entry.rollId)}">` +
+    `<span class="repeat-idx">#${rowIdx + 1}</span>` +
+    `${chips}${modStr}<span class="eq">=</span><span class="total">${rowTotal}</span>` +
+    `</div>`
+  );
+}
+
+function buildRepeatStripHtml(entry: DiceRollPayload): string {
+  const rows = entry.rowStarts ?? [];
+  if (rows.length === 0) return "";
+  const out: string[] = [];
+  for (let r = 0; r < rows.length; r++) {
+    const start = rows[r];
+    const end = r + 1 < rows.length ? rows[r + 1] : entry.dice.length;
+    const rowDice = entry.dice.slice(start, end);
+    const kept = rowDice.filter((d) => !d.loser);
+    // §9 consistency fix: subtraction dice count negative in row totals.
+    const rowTotal = kept.reduce((a, d) => a + (d.subtract ? -d.value : d.value), 0) + entry.modifier;
+    out.push(buildRepeatRowCard(entry, r, rowDice, rowTotal));
+  }
+  return `<div class="repeat-strip is-flow">${out.join("")}</div>`;
+}
+
+function renderEntrySolo(h: DiceRollPayload): string {
+  const cid = h.collectiveId ?? h.rollId;
+  const ago = formatAgo(Date.now() - h.ts);
+  const cls = ["entry"];
+  const kept = h.dice.filter((d) => !d.loser);
+  if (kept.some((d) => d.type === "d20" && d.value === 20)) cls.push("crit");
+  if (kept.some((d) => d.type === "d20" && d.value === 1)) cls.push("fail");
+  if (h.hidden) cls.push("hidden-roll");
+  if (cid === activeReplayCid) cls.push("replay-on");
+  const isRepeat = (h.rowStarts?.length ?? 0) > 1;
+  const body = isRepeat
+    ? buildRepeatStripHtml(h)
+    : `<div class="formula">${buildFormulaInner(h, /* showLabel */ false)}</div>`;
+  const darkTag = h.hidden ? `<span class="dark-tag">${tt("diceHistDarkTag")}</span>` : "";
+  const titleText = escapeHtml(h.label || h.rollerName);
+  return `
+    <div class="${cls.join(" ")}" data-cid="${escapeHtml(cid)}" style="--player-color:${h.rollerColor}" title="${tt("diceHistoryReplayTooltip")}">
+      <button class="entry-del" data-cid="${escapeHtml(cid)}" title="删除这条记录" aria-label="删除">×</button>
+      <div class="body">
+        <div class="line1">
+          <span class="player">${darkTag}${titleText}</span>
+          <span class="ago">${ago}</span>
+        </div>
+        ${h.expression ? `<div class="roll-expression" style="font:11px monospace;opacity:.8;overflow-wrap:anywhere">${escapeHtml(h.expression)}</div>` : ""}
+        ${body}
+      </div>
+    </div>
+  `;
+}
+
+function renderEntryCollective(cid: string, members: DiceRollPayload[]): string {
+  const head = members[0];
+  const ago = formatAgo(Date.now() - head.ts);
+  const cls = ["entry", "coll-entry"];
+  if (cid === activeReplayCid) cls.push("replay-on");
+  if (head.hidden) cls.push("hidden-roll");
+  const hasCrit = members.some((m) =>
+    m.dice.some((d) => !d.loser && d.type === "d20" && d.value === 20),
+  );
+  const hasFail = members.some((m) =>
+    m.dice.some((d) => !d.loser && d.type === "d20" && d.value === 1),
+  );
+  if (hasCrit) cls.push("crit");
+  else if (hasFail) cls.push("fail");
+  const darkTag = head.hidden ? `<span class="dark-tag">${tt("diceHistDarkTag")}</span>` : "";
+  const collTag = `<span class="coll-tag">${tt("diceHistColl")} ${members.length}</span>`;
+  const labelOrName = escapeHtml(head.label || head.rollerName);
+  return `
+    <div class="${cls.join(" ")}" data-cid="${escapeHtml(cid)}" style="--player-color:${head.rollerColor}" title="${tt("diceHistoryReplayTooltip")}">
+      <button class="entry-del" data-cid="${escapeHtml(cid)}" title="删除这条记录（含 ${members.length} 个掷骰）" aria-label="删除">×</button>
+      <div class="body">
+        <div class="line1">
+          <span class="player">${darkTag}${collTag}${labelOrName}</span>
+          <span class="ago">${ago}</span>
+        </div>
+        ${head.expression ? `<div class="roll-expression" style="font:11px monospace;opacity:.8;overflow-wrap:anywhere">${escapeHtml(head.expression)}</div>` : ""}
+        ${buildMemberStripHtml(members)}
+      </div>
+    </div>
+  `;
+}
+
+function renderHistoryList() {
+  const filtered = historyFilter
+    ? visibleHistory().filter((h) => h.rollerName === historyFilter)
+    : visibleHistory();
+  if (!filtered.length) {
+    historyList.innerHTML = `<div class="empty-state">${tt("diceHistoryEmpty")}</div>`;
+    return;
+  }
+  // Walk newest-first; pack consecutive collective members into one shared
+  // entry block. Same algorithm as history-page.ts's renderDetail. A
+  // `consumedIdx` Set keeps the local entries array intact so iterating
+  // never trips on a nullified element.
+  const consumedIdx = new Set<number>();
+  const blocks: string[] = [];
+  for (let i = 0; i < filtered.length; i++) {
+    if (consumedIdx.has(i)) continue;
+    const h = filtered[i];
+    const cid = h.collectiveId ?? h.rollId;
+    const members: DiceRollPayload[] = [];
+    for (let j = i; j < filtered.length; j++) {
+      if (consumedIdx.has(j)) continue;
+      const e = filtered[j];
+      if ((e.collectiveId ?? e.rollId) === cid) {
+        members.push(e);
+        consumedIdx.add(j);
+      }
+    }
+    if (!members.length) continue;
+    blocks.push(members.length === 1
+      ? renderEntrySolo(members[0])
+      : renderEntryCollective(cid, members));
+  }
+  historyList.innerHTML = blocks.join("");
+}
+
+function formatAgo(ms: number): string {
+  if (ms < 5_000) return tt("diceJustNow");
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}${tt("diceAgoS")}`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}${tt("diceAgoMin")}`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}${tt("diceAgoH")}`;
+  return `${Math.floor(ms / 86_400_000)}${tt("diceAgoD")}`;
+}
+
+// --- Tab switching ---
+
+function switchTab(t: typeof activeTab) {
+  activeTab = t;
+  tabBtns.forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
+  tabPanes.forEach((p) => p.classList.toggle("on", p.dataset.tab === t));
+  if (t === "history") {
+    renderHistorySeg();
+    renderHistoryList();
+  }
+  if (t === "combos") renderCombos();
+  if (t === "skins") void renderSkinsTab();
+}
+
+// --- Skins tab (per-die custom art) ---
+//
+// The right-click ATTACHMENT picker is the primary way to set a skin;
+// this tab reviews / resets / sets-by-URL. Reads + writes go through
+// OBR player metadata (see dice-skins.ts) so a skin set here is synced
+// room-wide and shows on everyone's screen when this player rolls.
+
+function guessMime(url: string): string {
+  const u = url.toLowerCase().split(/[?#]/)[0];
+  if (u.endsWith(".webm")) return "video/webm";
+  if (u.endsWith(".gif")) return "image/gif";
+  if (u.endsWith(".png")) return "image/png";
+  if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "image/jpeg";
+  if (u.endsWith(".svg")) return "image/svg+xml";
+  if (u.endsWith(".webp")) return "image/webp";
+  return "";
+}
+
+// 2026-05-15 — Chrome allocates one WebMediaPlayer per `<video>` with
+// any non-`none` preload, and caps the global pool — past ~75 in a
+// tab the renderer logs `[Intervention] Blocked attempt to create a
+// WebMediaPlayer …` and starts thrashing. With a webm skin library
+// of N skins × 7 dice the skins tab alone blew that cap to 6000+,
+// taking down the dice action panel and the OBR IPC with it (the
+// 5-second `OBR_SCENE_ITEMS_GET_ITEMS` timeout the user saw).
+//
+// Earlier `preload="metadata"` attempt didn't help — Chrome STILL
+// creates the player slot. The only fix that doesn't hit the cap is
+// to render library chips as `<img>` posters, extracted ONCE off a
+// throw-away video element (sequential, max 1 in flight) then cached
+// to a data URL. The active thumb (one per die row, max 7) keeps the
+// real `<video autoplay loop>` so the user sees the animation.
+
+// Module-level poster cache. value === undefined → not yet attempted;
+// string → data URL; null → extraction failed (CORS, decode error,
+// timeout); empty string treated as null.
+const webmPosterCache = new Map<string, string | null>();
+// Sequential-extraction gate. Each call chains to the previous so at
+// most ONE extractor video element exists at a time globally.
+let webmExtractChain: Promise<unknown> = Promise.resolve();
+
+function extractWebmPoster(url: string): Promise<string | null> {
+  const hit = webmPosterCache.get(url);
+  if (hit !== undefined) return Promise.resolve(hit || null);
+  const next = webmExtractChain.then(() => new Promise<string | null>((resolve) => {
+    if (webmPosterCache.has(url)) { resolve(webmPosterCache.get(url) || null); return; }
+    const v = document.createElement("video");
+    v.muted = true;
+    v.crossOrigin = "anonymous";
+    // `preload="metadata"` is enough — we only need the FIRST frame.
+    // `auto` would download more bytes than we ever use.
+    v.preload = "metadata";
+    v.playsInline = true;
+    let done = false;
+    const finish = (result: string | null) => {
+      if (done) return;
+      done = true;
+      webmPosterCache.set(url, result);
+      try { v.src = ""; v.removeAttribute("src"); v.load(); } catch { /* ignore */ }
+      try { v.remove(); } catch { /* ignore */ }
+      resolve(result);
+    };
+    v.onloadeddata = () => {
+      try { v.currentTime = 0.01; } catch { finish(null); }
+    };
+    v.onseeked = () => {
+      try {
+        // Cap poster size at 64×64 — chips render at 32px so this is
+        // already 2× retina headroom. Keeping the canvas small makes
+        // both `drawImage` and `toBlob` an order of magnitude cheaper
+        // than the native frame size (typical webm = 256×256+).
+        const srcW = v.videoWidth || 64;
+        const srcH = v.videoHeight || 64;
+        const MAX = 64;
+        const sc = Math.min(1, MAX / Math.max(srcW, srcH));
+        const w = Math.max(1, Math.round(srcW * sc));
+        const h = Math.max(1, Math.round(srcH * sc));
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        if (!ctx) { finish(null); return; }
+        ctx.drawImage(v, 0, 0, w, h);
+        // `toBlob` is async + uses the optimised image-encoder path
+        // (worker thread, no base64 inflation) — vastly faster than
+        // `toDataURL` on the main thread for many chips. Tainted
+        // canvases reject inside the callback (`null` blob).
+        c.toBlob((blob) => {
+          if (!blob) { finish(null); return; }
+          try { finish(URL.createObjectURL(blob)); }
+          catch { finish(null); }
+        }, "image/png");
+      } catch { finish(null); }
+    };
+    v.onerror = () => finish(null);
+    // Safety net: 6s ceiling per extraction so a stuck URL doesn't
+    // block the whole queue forever.
+    setTimeout(() => finish(null), 6000);
+    v.src = url;
+  }));
+  webmExtractChain = next.catch(() => null);
+  return next;
+}
+
+// Pre-warm the poster cache for every webm URL the user already has
+// in their library / sets. Runs on idle so the actual page-load cost
+// is zero; by the time the user clicks the 皮肤 tab the chips render
+// from cache hits with no extraction wait. Called once from boot.
+function prewarmWebmPosters(library: { libs: Partial<Record<DiceType, DiceSkin[]>>; sets: Array<{ skins: Partial<Record<DiceType, DiceSkin>> }> }): void {
+  const urls = new Set<string>();
+  for (const t of ALL_TYPES) {
+    for (const s of library.libs[t] ?? []) {
+      if (isVideoSkin(s)) urls.add(s.url);
+    }
+  }
+  for (const set of library.sets ?? []) {
+    for (const s of Object.values(set.skins ?? {})) {
+      if (s && isVideoSkin(s)) urls.add(s.url);
+    }
+  }
+  if (urls.size === 0) return;
+  const queueIdle = (cb: () => void) => {
+    if (typeof (window as any).requestIdleCallback === "function") {
+      (window as any).requestIdleCallback(cb, { timeout: 2000 });
+    } else {
+      setTimeout(cb, 50);
+    }
+  };
+  queueIdle(() => {
+    for (const url of urls) void extractWebmPoster(url);
+  });
+}
+
+function thumbHtml(skin: DiceSkin | null, type: DiceType, animate = false): string {
+  if (skin) {
+    if (isVideoSkin(skin)) {
+      // Active thumb (max 7 globally) — full animated video.
+      if (animate) {
+        return `<video src="${escapeHtml(skin.url)}" autoplay loop muted playsinline></video>`;
+      }
+      // Library chip — poster mode. Use cached data URL if we have
+      // one; otherwise emit a placeholder `<img data-webm-src=...>`
+      // that hydratePosters() fills in async. Cache miss + `null`
+      // (failed extraction) renders a small 🎞 fallback.
+      const cached = webmPosterCache.get(skin.url);
+      if (typeof cached === "string" && cached) {
+        return `<img src="${escapeHtml(cached)}" alt="" loading="lazy">`;
+      }
+      if (cached === null) {
+        return `<span class="webm-fallback" title="webm 缩略图无法预览（CORS / 解码失败）">🎞</span>`;
+      }
+      return `<img data-webm-src="${escapeHtml(skin.url)}" class="webm-poster-pending" alt="" loading="lazy">`;
+    }
+    return `<img src="${escapeHtml(skin.url)}" alt="" loading="lazy">`;
+  }
+  return `<img src="${escapeHtml(assetUrl(`${type}.png`))}" alt="${type}" class="is-default" loading="lazy">`;
+}
+
+// After the skin tab is rendered, walk the placeholder `<img>` chips
+// and extract their posters one by one. Filling `src` in place keeps
+// the layout stable. Disconnected nodes (panel re-rendered before
+// extraction landed) get skipped.
+function hydrateWebmPosters(): void {
+  if (!skinList) return;
+  const pending = skinList.querySelectorAll<HTMLImageElement>("img[data-webm-src]");
+  pending.forEach((img) => {
+    const url = img.dataset.webmSrc;
+    if (!url) return;
+    void extractWebmPoster(url).then((poster) => {
+      if (!img.isConnected) return;
+      if (poster) {
+        img.src = poster;
+        img.classList.remove("webm-poster-pending");
+        img.removeAttribute("data-webm-src");
+      } else {
+        // Replace the broken-poster img with the fallback marker.
+        const span = document.createElement("span");
+        span.className = "webm-fallback";
+        span.title = "webm 缩略图无法预览（CORS / 解码失败）";
+        span.textContent = "🎞";
+        img.replaceWith(span);
+      }
+    });
+  });
+}
+
+async function renderSkinsTab(): Promise<void> {
+  if (!skinList) return;
+  // Two reads: (1) the active map (what each die is currently rendering
+  // with), (2) the library + sets + random flags blob (the new model).
+  let active: DiceSkins = {};
+  let lib = { v: 2 as const, libs: {} as Partial<Record<DiceType, DiceSkin[]>>,
+              random: {} as Partial<Record<DiceType, boolean>>,
+              sets: [] as Array<{ id: string; name: string; skins: DiceSkins }> };
+  try { active = await readActiveSkins(); } catch { /* default empty */ }
+  try { lib = await readMyLibrary(); } catch { /* default empty */ }
+
+  // ===== upload hint banner =====
+  // Static — local-file imports don't survive a different iframe in the
+  // effect modal, so the URL HAS to point at an OBR-hosted asset.
+  const hintHtml =
+    `<div class="skin-hint">` +
+      `⚠ <b>本地电脑文件不能直接用</b> — 必须先把图片 / webm <b>上传到枭熊</b>：` +
+      `把它拖进场景作为「附件」，再右键附件选 <b>「设为我的骰子皮肤」</b>，` +
+      `或在下方粘贴该附件的 URL（须为 https:// 开头的绝对地址）。` +
+    `</div>`;
+
+  // ===== skin sets row =====
+  const setsHtml =
+    `<div class="skin-sets">` +
+      `<div class="skin-sets-head">` +
+        `<span class="skin-sets-title">皮肤套组</span>` +
+        `<button class="btn small skin-set-save" type="button" title="把当前 7 个骰子的活动皮肤存为一个套组">+ 保存当前为套组</button>` +
+      `</div>` +
+      (lib.sets.length === 0
+        ? `<div class="skin-sets-empty">还没有套组。配好你想要的 7 个骰子皮肤后，点上面「+ 保存当前为套组」。</div>`
+        : `<div class="skin-sets-list">` +
+            lib.sets.map((s) => {
+              const covered = ALL_TYPES.filter((t) => !!s.skins[t]).length;
+              return `<span class="skin-set-chip" data-set-id="${escapeHtml(s.id)}" title="一键载入「${escapeHtml(s.name)}」（覆盖 ${covered}/7 个骰子）">` +
+                `<span class="skin-set-name">${escapeHtml(s.name)}</span>` +
+                `<span class="skin-set-count">${covered}/7</span>` +
+                `<button class="skin-set-del" type="button" data-set-id="${escapeHtml(s.id)}" title="删除该套组">×</button>` +
+              `</span>`;
+            }).join("") +
+          `</div>`
+      ) +
+    `</div>`;
+
+  // ===== per-die rows =====
+  const rowsHtml = ALL_TYPES.map((type) => {
+    const activeSkin = active[type] ?? null;
+    const library = lib.libs[type] ?? [];
+    const isRandom = !!lib.random[type];
+    // 2026-05-15 — synthetic "default" chip prepended to every die's
+    // library strip so the user always sees the stock die art and can
+    // revert with one click. Carries `data-default="1"` (NOT a real
+    // library entry); the click handler sees that flag and calls
+    // setActiveSkin(type, null) to clear active back to default.
+    const defaultUrl = assetUrl(`${type}.png`);
+    const isDefaultActive = !isRandom && !activeSkin;
+    const defaultChipHtml =
+      `<span class="skin-lib-chip default-chip${isDefaultActive ? " on" : ""}" data-type="${type}" data-default="1" title="${isDefaultActive ? "当前正在使用默认皮肤" : "点击恢复为默认皮肤"}">` +
+        `<span class="skin-lib-thumb"><img src="${escapeHtml(defaultUrl)}" alt="${type}" class="is-default" loading="lazy"></span>` +
+      `</span>`;
+    const customChipsHtml = library.map((s) => {
+      const isActive = !isRandom && !!activeSkin && activeSkin.url === s.url;
+      return `<span class="skin-lib-chip${isActive ? " on" : ""}" data-type="${type}" data-url="${escapeHtml(s.url)}" title="${isActive ? "当前活动皮肤" : "点击设为当前皮肤"}">` +
+        `<span class="skin-lib-thumb">${thumbHtml(s, type)}</span>` +
+        `<button class="skin-lib-del" type="button" data-type="${type}" data-url="${escapeHtml(s.url)}" title="从皮肤库移除">×</button>` +
+      `</span>`;
+    }).join("");
+    const libStripHtml = defaultChipHtml + (
+      library.length === 0
+        ? `<span class="skin-lib-empty">右键场景里的附件「设为我的骰子皮肤」，或下方粘贴 URL，加入这里</span>`
+        : customChipsHtml
+    );
+    const statusLabel = isRandom
+      ? `随机 (${library.length})`
+      : (activeSkin ? "自定义" : "默认");
+    return (
+      `<div class="skin-row" data-type="${type}">` +
+        `<span class="skin-thumb">${thumbHtml(activeSkin, type, true)}</span>` +
+        `<div class="skin-body">` +
+          `<div class="skin-head">` +
+            `<span class="skin-name">${type}</span>` +
+            `<span class="skin-status${(activeSkin || isRandom) ? " custom" : ""}">${statusLabel}</span>` +
+            `<label class="skin-random" title="开启后，每次掷出该骰子都会从皮肤库里随机抽一张。皮肤库为空时回退到当前皮肤 / 默认。">` +
+              `<input type="checkbox" data-rand="${type}"${isRandom ? " checked" : ""}> 随机池` +
+            `</label>` +
+            (activeSkin && !isRandom ? `<button class="skin-reset" data-type="${type}" type="button" title="清掉当前活动皮肤（皮肤库保留）">重置</button>` : "") +
+          `</div>` +
+          `<div class="skin-lib-strip">${libStripHtml}</div>` +
+          `<div class="skin-url-row">` +
+            `<input class="skin-url-input" data-type="${type}" type="text" spellcheck="false" placeholder="https:// 开头的图片 / webm 绝对地址">` +
+            `<button class="skin-url-set" data-type="${type}" type="button">加入皮肤库</button>` +
+            `<button class="skin-url-set primary" data-type="${type}" data-also-active="1" type="button" title="加入皮肤库 + 设为当前">加入并应用</button>` +
+          `</div>` +
+        `</div>` +
+      `</div>`
+    );
+  }).join("");
+
+  // 2026-05-15 — explicitly release every existing `<video>` element's
+  // WebMediaPlayer slot BEFORE replacing innerHTML. Chrome's slot GC
+  // is async + lazy: just removing the DOM node lets the slot linger
+  // for several seconds. Across rapid re-renders (OBR.player.onChange
+  // fires once per metadata write, including OUR OWN setActiveSkin
+  // writes triggered by chip clicks) the slots accumulate past 75
+  // and the renderer chokes — exactly the user's "卡死" symptom.
+  // pause + src="" + load() forces immediate release.
+  const oldVideos = skinList.querySelectorAll<HTMLVideoElement>("video");
+  oldVideos.forEach((v) => {
+    try { v.pause(); } catch { /* ignore */ }
+    try { v.removeAttribute("src"); v.load(); } catch { /* ignore */ }
+  });
+
+  skinList.innerHTML = hintHtml + setsHtml + rowsHtml;
+  // Kick off async poster extraction for the placeholder webm chips.
+  // The extraction is sequential (1 video element at a time globally)
+  // so the WebMediaPlayer pool never blows.
+  hydrateWebmPosters();
+}
+
+// 2026-05-15 — debounced renderSkinsTab. `OBR.player.onChange` and
+// chip-click handlers both call renderSkinsTab; without coalescing,
+// a quick double-click fires 2-3 renders in <50 ms and the active-
+// thumb videos race the cleanup pass. 80 ms window is well under
+// human perception but enough to merge rapid bursts into one render.
+let _renderSkinsTabTimer: number | null = null;
+function scheduleRenderSkinsTab(): void {
+  if (_renderSkinsTabTimer != null) return;
+  _renderSkinsTabTimer = window.setTimeout(() => {
+    _renderSkinsTabTimer = null;
+    void renderSkinsTab();
+  }, 80);
+}
+
+if (skinList) {
+  skinList.addEventListener("click", async (e) => {
+    const target = e.target as HTMLElement;
+
+    // ----- skin set actions -----
+    const setDelBtn = target.closest<HTMLButtonElement>(".skin-set-del");
+    if (setDelBtn) {
+      e.stopPropagation();
+      const id = setDelBtn.dataset.setId;
+      if (id) {
+        try { await deleteSet(id); }
+        catch (err) { console.error("[obr-suite/dice] delete set failed", err); }
+        scheduleRenderSkinsTab();
+      }
+      return;
+    }
+    const setChip = target.closest<HTMLElement>(".skin-set-chip");
+    if (setChip) {
+      const id = setChip.dataset.setId;
+      if (id) {
+        try { await applySet(id); }
+        catch (err) { console.error("[obr-suite/dice] apply set failed", err); }
+        scheduleRenderSkinsTab();
+      }
+      return;
+    }
+    const setSaveBtn = target.closest<HTMLButtonElement>(".skin-set-save");
+    if (setSaveBtn) {
+      const name = window.prompt("给这套骰子皮肤起个名字：", "我的套组");
+      if (name && name.trim()) {
+        try { await saveCurrentAsSet(name.trim()); }
+        catch (err) { console.error("[obr-suite/dice] save set failed", err); }
+        scheduleRenderSkinsTab();
+      }
+      return;
+    }
+
+    // ----- library chip actions -----
+    const libDelBtn = target.closest<HTMLButtonElement>(".skin-lib-del");
+    if (libDelBtn) {
+      e.stopPropagation();
+      const type = libDelBtn.dataset.type as DiceType | undefined;
+      const url = libDelBtn.dataset.url;
+      if (type && url) {
+        try { await removeFromLibrary(type, url); }
+        catch (err) { console.error("[obr-suite/dice] remove from library failed", err); }
+        scheduleRenderSkinsTab();
+      }
+      return;
+    }
+    const libChip = target.closest<HTMLElement>(".skin-lib-chip");
+    if (libChip) {
+      const type = libChip.dataset.type as DiceType | undefined;
+      // Default chip path: clear active to revert to the stock die
+      // PNG. Random mode also goes off so the user actually sees
+      // the default on the next roll instead of a random library pick.
+      if (libChip.dataset.default === "1" && type) {
+        try {
+          await setRandomMode(type, false);
+          await setActiveSkin(type, null);
+        } catch (err) {
+          console.error("[obr-suite/dice] reset to default failed", err);
+        }
+        scheduleRenderSkinsTab();
+        return;
+      }
+      const url = libChip.dataset.url;
+      if (type && url) {
+        try {
+          // Setting active also turns OFF random mode for that die so
+          // the explicit pick actually shows up on the next roll.
+          await setRandomMode(type, false);
+          await setActiveSkin(type, { url, mime: guessMime(url) });
+        } catch (err) {
+          console.error("[obr-suite/dice] set active from library failed", err);
+        }
+        scheduleRenderSkinsTab();
+      }
+      return;
+    }
+
+    // ----- per-row reset / set-by-url -----
+    const resetBtn = target.closest<HTMLButtonElement>(".skin-reset");
+    if (resetBtn) {
+      const type = resetBtn.dataset.type as DiceType;
+      try { await setActiveSkin(type, null); }
+      catch (err) { console.error("[obr-suite/dice] reset skin failed", err); }
+      scheduleRenderSkinsTab();
+      return;
+    }
+    const setBtn = target.closest<HTMLButtonElement>(".skin-url-set");
+    if (setBtn) {
+      const type = setBtn.dataset.type as DiceType;
+      const input = skinList.querySelector<HTMLInputElement>(
+        `.skin-url-input[data-type="${type}"]`,
+      );
+      const url = (input?.value ?? "").trim();
+      if (!url) return;
+      // The effect modal renders this URL from a different iframe, so
+      // it must be an absolute http(s) URL — reject relative paths.
+      if (!/^https?:\/\//i.test(url)) {
+        input?.classList.add("invalid");
+        setTimeout(() => input?.classList.remove("invalid"), 1200);
+        return;
+      }
+      const mime = guessMime(url);
+      try {
+        if (setBtn.dataset.alsoActive === "1") {
+          await writeSkin(type, { url, mime }); // adds to library AND sets active
+        } else {
+          await addToLibrary(type, { url, mime });
+        }
+      } catch (err) {
+        console.error("[obr-suite/dice] set skin url failed", err);
+      }
+      if (input) input.value = "";
+      scheduleRenderSkinsTab();
+      return;
+    }
+  });
+
+  // Random-pool toggle (checkbox change isn't a click on the input
+  // itself — bind separately).
+  skinList.addEventListener("change", async (e) => {
+    const cb = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-rand]");
+    if (!cb) return;
+    const type = cb.dataset.rand as DiceType;
+    try { await setRandomMode(type, cb.checked); }
+    catch (err) { console.error("[obr-suite/dice] toggle random failed", err); }
+    scheduleRenderSkinsTab();
+  });
+}
+
+// --- Roll dispatch ---
+//
+// The "clear" concept was removed — every roll now self-dismisses
+// (effect modal flies the dice down to the bottom-left history popover
+// and closes). The buttons stay as plain "投掷" / "暗骰" forever.
+
+// Owned + visible selected tokens — these are the legitimate targets
+// for a normal roll. GM can roll for any selected token; players can
+// only roll for tokens they own (createdUserId match).
+//
+// Fallback for players: if NO selection (or selection has nothing the
+// player owns) AND the player owns exactly one visible character
+// token, auto-target that single token. Removes the "click your own
+// token first" friction in the common case where a player only has
+// one PC.
+// Token has an active character-card binding when its metadata carries a
+// non-empty boundCardId. Used by the player auto-target path to break
+// ties between multiple owned tokens — when exactly one of the owned
+// tokens has a card bound, we roll on that one without forcing a manual
+// selection.
+const CC_BOUND_KEY = "com.character-cards/boundCardId";
+function hasBoundCard(it: any): boolean {
+  const v = (it?.metadata as any)?.[CC_BOUND_KEY];
+  return typeof v === "string" && v.length > 0;
+}
+
+async function getOwnedSelectedTokenIds(): Promise<string[]> {
+  try {
+    const sel = await OBR.player.getSelection();
+    const myId = await OBR.player.getId();
+    if (sel && sel.length) {
+      const items = await OBR.scene.items.getItems(sel);
+      const filtered = items
+        .filter((it: any) => it.visible && (isDM || it.createdUserId === myId))
+        .map((it: any) => it.id);
+      if (filtered.length) return filtered;
+    }
+    // Player auto-target with multi-owner disambiguation:
+    //   1 owned          → roll on that one (always)
+    //   N owned, 1 has cc → roll on the cc-bound one (the user's
+    //                       "main" character; the others are e.g.
+    //                       summons / familiars without sheets)
+    //   N owned, 0 has cc → no auto-target → empty array → caller
+    //                       shows the "请选中角色" warning
+    //   N owned, ≥2 cc    → ambiguous → same warning
+    if (!isDM) {
+      const items = await OBR.scene.items.getItems(
+        (it: any) =>
+          it.type === "IMAGE" &&
+          (it.layer === "CHARACTER" || it.layer === "MOUNT") &&
+          it.visible &&
+          it.createdUserId === myId,
+      );
+      if (items.length === 1) return [items[0].id];
+      if (items.length > 1) {
+        const carded = items.filter(hasBoundCard);
+        if (carded.length === 1) return [carded[0].id];
+        // Multiple carded or zero carded → ambiguous, force manual
+        // selection.
+      }
+      return [];
+    }
+    // DM auto-target: pick the character / mount whose CENTER is
+    // closest to the screen center (the dice-panel crosshair marks
+    // that exact point). Caller will then `focusCameraOnTokens` to
+    // pan the camera over the picked token before the roll fires.
+    const candidates = await OBR.scene.items.getItems(
+      (it: any) =>
+        it.type === "IMAGE" &&
+        (it.layer === "CHARACTER" || it.layer === "MOUNT") &&
+        it.visible,
+    );
+    if (!candidates.length) return [];
+    let bestId: string | null = null;
+    let bestD2 = Infinity;
+    try {
+      const [vw, vh] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+      ]);
+      const cx = vw / 2;
+      const cy = vh / 2;
+      for (const it of candidates) {
+        const p = (it as any).position;
+        if (!p) continue;
+        const sp = await OBR.viewport.transformPoint(p);
+        const dx = sp.x - cx;
+        const dy = sp.y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          bestId = (it as any).id ?? null;
+        }
+      }
+    } catch {}
+    return bestId ? [bestId] : [];
+  } catch {}
+  return [];
+}
+
+// Camera focus before a roll fires. Single target: keep the user's
+// current zoom (they may have framed the scene already), just pan so
+// the token is centered. Multi target: fit a bounding box covering
+// every target so the player sees all dice columns at once.
+//
+// Per spec: do NOT use animateTo with scale=1 (was the old behaviour
+// in showDiceEffect — too aggressive, snapped from a wide overview to
+// 100% on every single-target roll). And do NOT focus per-broadcast
+// (was per-token, caused chaotic camera-thrash for multi-rolls).
+async function focusCameraOnTokens(tokenIds: string[]): Promise<void> {
+  if (!tokenIds.length) return;
+  try {
+    const items = await OBR.scene.items.getItems(tokenIds);
+    if (!items.length) return;
+    if (items.length === 1) {
+      const [vw, vh, currentScale] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+        OBR.viewport.getScale(),
+      ]);
+      const p = items[0].position;
+      OBR.viewport.animateTo({
+        position: { x: -p.x * currentScale + vw / 2, y: -p.y * currentScale + vh / 2 },
+        scale: currentScale,
+      }).catch(() => {});
+      return;
+    }
+    // Multi-target — bounding box across every token position. Padding
+    // (in world units) keeps tokens away from the screen edge so the
+    // dice that anchor on each token's TOP have room to fly in.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const it of items) {
+      const p = (it as any).position;
+      if (!p) continue;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (!Number.isFinite(minX)) return;
+    let dpi = 150;
+    try { dpi = await OBR.scene.grid.getDpi(); } catch {}
+    const padX = dpi * 1.5;
+    const padY = dpi * 2;   // extra vertical so dice above heads stay visible
+    const min = { x: minX - padX, y: minY - padY };
+    const max = { x: maxX + padX, y: maxY + padY };
+    const w = max.x - min.x;
+    const h = max.y - min.y;
+
+    // Skip the zoom-to-fit if the user is already zoomed wider than
+    // the bbox AND every target sits inside the current viewport.
+    // Per spec: only zoom-to-bounds when the bbox doesn't fit in the
+    // current view (otherwise we'd be yanking the GM's framing closer
+    // for no reason). Use the world-to-screen transform to project
+    // the bbox corners into pixel space, then test against the
+    // viewport rect.
+    try {
+      const [vw, vh, scale, vpPos] = await Promise.all([
+        OBR.viewport.getWidth(),
+        OBR.viewport.getHeight(),
+        OBR.viewport.getScale(),
+        OBR.viewport.getPosition(),
+      ]);
+      // viewport position = screen-pixel offset of world origin, so
+      // screenX = worldX * scale + position.x.
+      const tlX = min.x * scale + vpPos.x;
+      const tlY = min.y * scale + vpPos.y;
+      const brX = max.x * scale + vpPos.x;
+      const brY = max.y * scale + vpPos.y;
+      // Tiny slack so a bbox edge that's pixel-perfectly at the
+      // viewport edge isn't penalised by floating-point jitter.
+      const slack = 2;
+      const fits = tlX >= -slack && tlY >= -slack && brX <= vw + slack && brY <= vh + slack;
+      if (fits) return;
+    } catch {}
+
+    OBR.viewport.animateToBounds({
+      min,
+      max,
+      width: w,
+      height: h,
+      center: { x: (min.x + max.x) / 2, y: (min.y + max.y) / 2 },
+    }).catch(() => {});
+  } catch {}
+}
+
+
+async function emitOneRoll(opts: {
+  dice: DieResult[];
+  winnerIdx: number;
+  modifier: number;
+  label: string;
+  expression?: string;
+  itemId: string | null;
+  hidden: boolean;
+  rowStarts?: number[];
+  sameHighlight?: boolean;
+  collectiveId?: string;
+}): Promise<void> {
+  if (!opts.dice.length) return;
+  // Total: sum of all NON-loser dice. Subtraction dice contribute
+  // NEGATIVE to the sum (e.g. 1d20-1d6 with rolls 18 and 4 → 14).
+  // For repeat-mode the panel total is the grand sum; the visual
+  // computes per-row totals from rowStarts independently. modifier
+  // is added once per row visually but only once to the grand total
+  // here (history-friendly aggregate).
+  const kept = opts.dice.filter((d) => !d.loser);
+  const baseTotal = kept.reduce(
+    (a, d) => a + (d.subtract ? -d.value : d.value),
+    0,
+  );
+  const total = opts.rowStarts && opts.rowStarts.length > 0
+    ? baseTotal + opts.modifier * opts.rowStarts.length
+    : baseTotal + opts.modifier;
+
+  let rollerId = "";
+  let rollerName = tt("diceRollerFallback");
+  let rollerColor = "#5dade2";
+  try {
+    [rollerId, rollerName, rollerColor] = await Promise.all([
+      OBR.player.getId(),
+      OBR.player.getName(),
+      OBR.player.getColor(),
+    ]);
+  } catch {}
+
+  const rollId = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  myActiveRollIds.add(rollId);
+  const payload: DiceRollPayload = {
+    itemId: opts.itemId,
+    dice: opts.dice,
+    winnerIdx: opts.winnerIdx,
+    modifier: opts.modifier,
+    label: opts.label,
+    expression: opts.expression,
+    total,
+    rollerId,
+    rollerName,
+    rollerColor,
+    rollId,
+    ts: Date.now(),
+    hidden: opts.hidden,
+    ...(opts.rowStarts ? { rowStarts: opts.rowStarts } : {}),
+    ...(opts.sameHighlight ? { sameHighlight: true } : {}),
+    ...(opts.collectiveId ? { collectiveId: opts.collectiveId } : {}),
+  };
+
+  try {
+    if (opts.hidden) {
+      // Dark roll: LOCAL only — players never receive it; only the
+      // sender's own client renders the (translucent) modal.
+      await OBR.broadcast.sendMessage(BROADCAST_DICE_ROLL, payload, { destination: "LOCAL" });
+    } else {
+      await Promise.all([
+        OBR.broadcast.sendMessage(BROADCAST_DICE_ROLL, payload, { destination: "LOCAL" }),
+        OBR.broadcast.sendMessage(BROADCAST_DICE_ROLL, payload, { destination: "REMOTE" }),
+      ]);
+    }
+  } catch (e) {
+    console.error("[obr-suite/dice-panel] broadcast failed", e);
+  }
+}
+
+// Compute the dice array (with adv/dis loser annotations + value
+// transforms + burst expansion) for a single "instance" of a roll.
+// Multi-token rolls call this once per token so each token gets its
+// own independent dice values.
+//
+// `repeat` is handled specially here: it produces N independent inner
+// rolls and reports row boundaries so the visual can lay them out one
+// row per iteration with per-row totals.
+// `same` is a visual-only flag — propagated via sameHighlight, doesn't
+// alter the rolled values.
+interface BuiltRoll {
+  dice: DieResult[];
+  winnerIdx: number;
+  rowStarts?: number[];  // repeat: row[i] spans [rowStarts[i], rowStarts[i+1] || dice.length)
+  sameHighlight?: boolean;
+}
+function buildOneRollDice(parsed: ParsedExpr): BuiltRoll {
+  // `same` highlight + `repeat` row layout are recognized at the
+  // segment level. We support repeat ONLY when it's the outermost
+  // wrapper of a segment that also covers all dice (i.e., a single
+  // segment with empty outerPlain). Mixing repeat with siblings is
+  // explicitly out of scope.
+  const sameHighlight = parsed.segments.some((s) =>
+    s.wrappers.some((w) => w.kind === "same"),
+  );
+
+  const repeatSegIdx = parsed.segments.findIndex((s) =>
+    s.wrappers.some((w) => w.kind === "repeat"),
+  );
+  const outerDice = rollPlainSet(parsed.outerPlain);
+
+  if (repeatSegIdx >= 0 && parsed.segments.length === 1 && outerDice.length === 0) {
+    const seg = parsed.segments[0];
+    const repeatW = seg.wrappers.find((w) => w.kind === "repeat")!;
+    const inner = seg.wrappers.filter((w) => w.kind !== "same" && w.kind !== "repeat");
+    const N = Math.max(1, repeatW.param ?? 1);
+    const allDice: DieResult[] = [];
+    const rowStarts: number[] = [];
+    for (let i = 0; i < N; i++) {
+      rowStarts.push(allDice.length);
+      const r = rollExpr(seg.plain, inner);
+      for (const d of r.dice) allDice.push(d);
+    }
+    return { dice: allDice, winnerIdx: -1, rowStarts, sameHighlight };
+  }
+
+  // Roll each segment INDEPENDENTLY through its own wrapper chain, then
+  // stitch dice arrays together. Each segment has its own winnerIdx
+  // (only meaningful for single-die segments under adv/dis), but the
+  // top-level winnerIdx is meaningful only when there's exactly one
+  // segment with one kept die.
+  const allDice: DieResult[] = [];
+  let winnerIdx = -1;
+  for (const seg of parsed.segments) {
+    const inner = seg.wrappers.filter((w) => w.kind !== "same" && w.kind !== "repeat");
+    const r = rollExpr(seg.plain, inner);
+    if (parsed.segments.length === 1 && outerDice.length === 0) {
+      winnerIdx = r.winnerIdx;
+    }
+    for (const d of r.dice) allDice.push(d);
+  }
+  for (const d of outerDice) allDice.push(d);
+  return { dice: allDice, winnerIdx, sameHighlight };
+}
+
+// ---- §9 (2026-08-21): DM fixed-result building (panel grammar) -----
+//
+// Produces REAL die faces whose kept sum + modifier equals the target.
+// Supported: plain sums (subtraction dice included), max/min clamps,
+// reset/resetmin/resetmax (a triggered reroll can land on any face, so
+// every final face is reachable), same (visual-only), repeat (grand
+// total = faces + modifier × rows), and ONE outermost adv/dis per
+// segment — losing sets get real faces constrained to the losing side
+// of rollExpr's raw-sum comparison, so replaying the comparison yields
+// the same winner. Refused: burst (faces are structurally coupled to
+// spawned child dice) and nested / non-outermost adv-dis. A refusal
+// falls back to a true random roll with a WARNING; the fix stays armed.
+
+type FixedBuild =
+  | { ok: BuiltRoll }
+  | { err: "unsupported" }
+  | { err: "bounds"; min: number; max: number };
+
+// Final-face range of one die after its value-wrapper chain, applied
+// in rollExpr order (array order = innermost first). Returns null for
+// unsupported wrappers or clamp params outside the die's face range
+// (e.g. max(1d6,10) — the broadcast layer would re-clamp such faces
+// and break consistency, so we refuse instead).
+function clampRangeForWrappers(
+  sides: number,
+  wrappers: Wrapper[],
+): { lo: number; hi: number } | null {
+  let lo = 1;
+  let hi = sides;
+  for (const w of wrappers) {
+    switch (w.kind) {
+      case "max": {
+        const X = w.param ?? 1;
+        if (X < 1 || X > sides) return null;
+        lo = Math.max(lo, X);
+        hi = Math.max(hi, X);
+        break;
+      }
+      case "min": {
+        const X = w.param ?? 1;
+        if (X < 1 || X > sides) return null;
+        lo = Math.min(lo, X);
+        hi = Math.min(hi, X);
+        break;
+      }
+      case "reset":
+      case "resetmin":
+      case "resetmax":
+        lo = 1;
+        hi = sides;
+        break;
+      case "same":
+        break;
+      default:
+        return null;
+    }
+  }
+  return { lo, hi };
+}
+
+function buildFixedRollDice(parsed: ParsedExpr, target: number): FixedBuild {
+  if (!Number.isInteger(target)) return { err: "unsupported" };
+  const sameHighlight = parsed.segments.some((s) =>
+    s.wrappers.some((w) => w.kind === "same"),
+  );
+
+  // Kept dice accumulate here in creation order; faces are assigned in
+  // one distributeFaces pass, then loser sets are generated against
+  // the now-known kept sums.
+  const keptSpecs: DieSpec[] = [];
+  const keptDice: DieResult[] = [];
+
+  const addPlainKept = (
+    plain: PlainExpr,
+    valueWrappers: Wrapper[],
+    into: DieResult[],
+  ): boolean => {
+    for (const g of plain.groups) {
+      const sides = sidesOf(g.type);
+      const range = clampRangeForWrappers(sides, valueWrappers);
+      if (!range) return false;
+      const subtract = g.count < 0;
+      const n = Math.abs(g.count);
+      for (let i = 0; i < n; i++) {
+        const d: DieResult = { type: g.type as DiceType, value: 0 };
+        if (subtract) d.subtract = true;
+        keptSpecs.push({ sides, lo: range.lo, hi: range.hi, subtract });
+        keptDice.push(d);
+        into.push(d);
+      }
+    }
+    return true;
+  };
+
+  const repeatSegIdx = parsed.segments.findIndex((s) =>
+    s.wrappers.some((w) => w.kind === "repeat"),
+  );
+  const outerHasDice = parsed.outerPlain.groups.some((g) => g.count !== 0);
+
+  // --- repeat path (mirrors buildOneRollDice's支持范围) ---
+  if (repeatSegIdx >= 0) {
+    if (parsed.segments.length !== 1 || outerHasDice) return { err: "unsupported" };
+    const seg = parsed.segments[0];
+    const inner = seg.wrappers.filter((w) => w.kind !== "same" && w.kind !== "repeat");
+    if (inner.some((w) => w.kind === "adv" || w.kind === "dis" || w.kind === "burst")) {
+      return { err: "unsupported" };
+    }
+    const repeatW = seg.wrappers.find((w) => w.kind === "repeat")!;
+    const N = Math.max(1, repeatW.param ?? 1);
+    const all: DieResult[] = [];
+    const rowStarts: number[] = [];
+    for (let i = 0; i < N; i++) {
+      rowStarts.push(all.length);
+      if (!addPlainKept(seg.plain, inner, all)) return { err: "unsupported" };
+    }
+    if (!keptDice.length) return { err: "unsupported" };
+    const mod = totalModifier(parsed) * N;
+    const faces = distributeFaces(keptSpecs, target - mod);
+    if (!faces) {
+      const { low, high } = faceBounds(keptSpecs);
+      return { err: "bounds", min: low + mod, max: high + mod };
+    }
+    faces.forEach((f, i) => { keptDice[i].value = f; });
+    return { ok: { dice: all, winnerIdx: -1, rowStarts, sameHighlight } };
+  }
+
+  // --- segments + outer plain ---
+  interface SegPlan {
+    keptSet: DieResult[];
+    keptStart: number;
+    kind: "adv" | "dis" | null;
+    loserSets: Array<{ dice: DieResult[]; specs: DieSpec[] }>;
+  }
+  const plans: SegPlan[] = [];
+  for (const seg of parsed.segments) {
+    const wr = seg.wrappers.filter((w) => w.kind !== "same" && w.kind !== "repeat");
+    if (wr.some((w) => w.kind === "burst")) return { err: "unsupported" };
+    const advPositions: number[] = [];
+    wr.forEach((w, i) => {
+      if (w.kind === "adv" || w.kind === "dis") advPositions.push(i);
+    });
+    if (advPositions.length > 1) return { err: "unsupported" };
+    if (advPositions.length === 1 && advPositions[0] !== wr.length - 1) {
+      return { err: "unsupported" };
+    }
+
+    if (advPositions.length === 0) {
+      const keptSet: DieResult[] = [];
+      const keptStart = keptDice.length;
+      if (!addPlainKept(seg.plain, wr, keptSet)) return { err: "unsupported" };
+      plans.push({ keptSet, keptStart, kind: null, loserSets: [] });
+      continue;
+    }
+
+    const advW = wr[wr.length - 1];
+    const inner = wr.slice(0, -1);
+    const keptSet: DieResult[] = [];
+    const keptStart = keptDice.length;
+    if (!addPlainKept(seg.plain, inner, keptSet)) return { err: "unsupported" };
+    const loserSets: Array<{ dice: DieResult[]; specs: DieSpec[] }> = [];
+    const extraSets = Math.max(1, advW.param ?? 1);
+    for (let s = 0; s < extraSets; s++) {
+      // Loser faces are RAW: rollExpr compares sets by raw value sum
+      // (subtract flags don't negate there) and applyValueClamp skips
+      // loser-marked dice, so their reachable range is [1, sides].
+      const dice: DieResult[] = [];
+      const specs: DieSpec[] = [];
+      for (const g of seg.plain.groups) {
+        const sides = sidesOf(g.type);
+        const subtract = g.count < 0;
+        const n = Math.abs(g.count);
+        for (let i = 0; i < n; i++) {
+          const d: DieResult = { type: g.type as DiceType, value: 0, loser: true };
+          if (subtract) d.subtract = true;
+          dice.push(d);
+          specs.push({ sides, lo: 1, hi: sides });
+        }
+      }
+      loserSets.push({ dice, specs });
+    }
+    plans.push({ keptSet, keptStart, kind: advW.kind as "adv" | "dis", loserSets });
+  }
+
+  const outerChunk: DieResult[] = [];
+  if (!addPlainKept(parsed.outerPlain, [], outerChunk)) return { err: "unsupported" };
+  if (!keptDice.length) return { err: "unsupported" };
+
+  // Assign every kept face in one pass.
+  const mod = totalModifier(parsed);
+  const faces = distributeFaces(keptSpecs, target - mod);
+  if (!faces) {
+    const { low, high } = faceBounds(keptSpecs);
+    return { err: "bounds", min: low + mod, max: high + mod };
+  }
+  faces.forEach((f, i) => { keptDice[i].value = f; });
+
+  // Generate loser sets + assemble chunks. The kept set lands at a
+  // random position among its sets; sets BEFORE it must be STRICTLY
+  // worse (rollExpr's scan keeps the first max/min, so an earlier tie
+  // would steal the win), sets after it may tie.
+  const allDice: DieResult[] = [];
+  let winnerIdx = -1;
+  for (const plan of plans) {
+    if (!plan.kind) {
+      for (const d of plan.keptSet) allDice.push(d);
+      continue;
+    }
+    const keptRaw = plan.keptSet.reduce((a, d) => a + d.value, 0);
+    const setsCount = plan.loserSets.length + 1;
+    let pos = Math.floor(Math.random() * setsCount);
+    // Strict feasibility for sets placed before the kept one.
+    const rawLo = plan.loserSets[0]?.specs.reduce((a, s) => a + s.lo, 0) ?? 0;
+    const rawHi = plan.loserSets[0]?.specs.reduce((a, s) => a + s.hi, 0) ?? 0;
+    if (plan.kind === "adv" && keptRaw - 1 < rawLo) pos = 0;
+    if (plan.kind === "dis" && keptRaw + 1 > rawHi) pos = 0;
+
+    const segStartInAll = allDice.length;
+    let keptStartInAll = -1;
+    let loserPtr = 0;
+    for (let s = 0; s < setsCount; s++) {
+      if (s === pos) {
+        keptStartInAll = allDice.length;
+        for (const d of plan.keptSet) allDice.push(d);
+        continue;
+      }
+      const ls = plan.loserSets[loserPtr++];
+      const strict = s < pos;
+      let lo = rawLo;
+      let hi = rawHi;
+      if (plan.kind === "adv") hi = Math.min(hi, keptRaw - (strict ? 1 : 0));
+      else lo = Math.max(lo, keptRaw + (strict ? 1 : 0));
+      if (hi < lo) return { err: "unsupported" };
+      const sum = randIntInclusive(lo, hi);
+      const lfaces = distributeFaces(ls.specs, sum);
+      if (!lfaces) return { err: "unsupported" };
+      lfaces.forEach((f, i) => { ls.dice[i].value = f; });
+      for (const d of ls.dice) allDice.push(d);
+    }
+    // rollExpr reports winnerIdx only for single-die winning sets, and
+    // buildOneRollDice surfaces it only for a lone segment without
+    // outer dice — mirror both conditions.
+    if (
+      plan.keptSet.length === 1 &&
+      parsed.segments.length === 1 &&
+      outerChunk.length === 0 &&
+      segStartInAll === 0
+    ) {
+      winnerIdx = keptStartInAll;
+    }
+  }
+  for (const d of outerChunk) allDice.push(d);
+  return { ok: { dice: allDice, winnerIdx, sameHighlight } };
+}
+
+// §9 — panel-side consume: verify GM with a FRESH getRole at this
+// execution entry (the armed flag is client-local state, not proof of
+// role), enforce the single-target policy, build the fixed dice, and
+// only then burn the one-shot arm. Every refusal keeps the arm and
+// tells the DM why.
+async function maybeConsumeFixedForPanel(
+  parsed: ParsedExpr,
+  targetCount: number,
+  entry: string,
+): Promise<BuiltRoll | null> {
+  const armed = readFixedRoll();
+  if (!armed) return null;
+  let role = "PLAYER";
+  try {
+    role = await OBR.player.getRole();
+  } catch (e) {
+    console.warn("[obr-suite/dice-panel] fixed-roll role verify failed — rolling for real", e);
+    return null;
+  }
+  if (role !== "GM") {
+    // Demoted client with a stale arm — clear it.
+    disarmFixedRoll();
+    refreshFixedRollUi();
+    return null;
+  }
+  const zh = lang !== "en";
+  if (targetCount > 1) {
+    OBR.notification
+      .show(
+        zh
+          ? "固定结果仅支持单目标投掷，本次真实投掷（保持已固定）"
+          : "Fixed results support a single target only — rolled for real (still armed)",
+        "WARNING",
+      )
+      .catch(() => {});
+    console.warn("[obr-suite/dice-panel] fixed roll not applied", {
+      entry, target: armed.value, reason: "multi-target", targetCount,
+    });
+    return null;
+  }
+  const built = buildFixedRollDice(parsed, armed.value);
+  if ("ok" in built) {
+    consumeFixedRoll();
+    refreshFixedRollUi();
+    console.info("[obr-suite/dice-panel] fixed roll applied", {
+      entry, expression: formatExpr(parsed), target: armed.value,
+    });
+    return built.ok;
+  }
+  if (built.err === "bounds") {
+    OBR.notification
+      .show(
+        zh
+          ? `固定值 ${armed.value} 超出该公式范围 [${built.min}, ${built.max}]，本次真实投掷（保持已固定）`
+          : `Fixed value ${armed.value} is outside this formula's range [${built.min}, ${built.max}] — rolled for real (still armed)`,
+        "WARNING",
+      )
+      .catch(() => {});
+  } else {
+    OBR.notification
+      .show(
+        zh
+          ? "该公式不支持固定结果（burst/嵌套优劣势），本次真实投掷（保持已固定）"
+          : "This formula doesn't support fixed results (burst / nested adv-dis) — rolled for real (still armed)",
+        "WARNING",
+      )
+      .catch(() => {});
+  }
+  console.warn("[obr-suite/dice-panel] fixed roll not applied", {
+    entry, expression: formatExpr(parsed), target: armed.value, reason: built.err,
+  });
+  return null;
+}
+
+// §9 — arm/disarm UI. Row is DM-only (shown in the onReady role block);
+// the button reflects the armed state, which can also change from the
+// BACKGROUND iframe consuming the arm (quick-roll) — hence the
+// `storage` listener wired below.
+function refreshFixedRollUi(): void {
+  const row = document.getElementById("fixedRollRow") as HTMLElement | null;
+  const btn = document.getElementById("btnFixedRoll") as HTMLButtonElement | null;
+  const inp = document.getElementById("fixedRollValue") as HTMLInputElement | null;
+  if (!row || !btn || !inp) return;
+  row.style.display = isDM ? "flex" : "none";
+  const armed = readFixedRoll();
+  const zh = lang !== "en";
+  if (armed) {
+    btn.classList.add("on");
+    btn.textContent = zh ? `已固定：${armed.value}（点击取消）` : `Fixed: ${armed.value} (click to cancel)`;
+  } else {
+    btn.classList.remove("on");
+    btn.textContent = zh ? "固定下次：关" : "Fix next: off";
+  }
+}
+
+async function performRoll(opts: { hidden: boolean }): Promise<void> {
+  // The button to shake — for the main panel that's btnRoll, for the
+  // dark-roll variant it's btnDarkRoll (visible only to DM).
+  const btnSelf = opts.hidden
+    ? (document.getElementById("btnDarkRoll") as HTMLButtonElement | null) ?? btnRoll
+    : btnRoll;
+
+  if (isAnimating) {
+    shakeButtonWithReason(btnSelf, tt("diceShakeAnim"));
+    return;
+  }
+  const expr = expression;
+  const label = labelText.trim();
+  const parsed = parseExpr(expr);
+  if (exprIsEmpty(parsed)) {
+    shakeButtonWithReason(btnSelf, expr.trim() ? tt("diceShakeParse") : tt("diceShakeEmpty"));
+    return;
+  }
+
+  // Resolve target tokens.
+  //   - Normal roll: REQUIRES at least one owned-and-visible selected
+  //     token. Empty selection → shake and bail.
+  //   - Dark roll: tokens are optional — DM can dark-roll without any
+  //     selection (anchored at viewport center for them only).
+  let targetTokens = await getOwnedSelectedTokenIds();
+  if (!opts.hidden && targetTokens.length === 0) {
+    shakeButtonWithReason(btnSelf, tt("diceShakeNoToken"));
+    return;
+  }
+  if (opts.hidden && targetTokens.length === 0) {
+    targetTokens = [""]; // empty itemId → effect-page anchors at viewport center
+  }
+
+  // Save expression for "上一次" BEFORE clearing the input.
+  lastRolledExpression = expr;
+  saveLastExpr(expr);
+  btnLastRoll.disabled = false;
+
+  // Camera focus BEFORE broadcasting. Filter out the empty-string
+  // entry that signals dark-roll-with-no-selection (those have no
+  // token to focus on). Only the roller's own client moves.
+  const focusIds = targetTokens.filter((id) => id);
+  if (focusIds.length) focusCameraOnTokens(focusIds);
+
+  // One broadcast per target token. Each gets its own roll values
+  // (independent dice) — important so each token's dice are
+  // unique to it, not shared. All emitted broadcasts share a single
+  // collectiveId so history can group them as one entry and the
+  // click-to-replay overlay can find every member of the group.
+  // §9 — non-null only when armed + GM-verified + single target; the
+  // loop below then has exactly one iteration.
+  const fixedBuilt = await maybeConsumeFixedForPanel(parsed, targetTokens.length, "panel-roll");
+
+  const collectiveId = `col-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  let sent = 0;
+  for (const tokenId of targetTokens) {
+    const built = fixedBuilt ?? buildOneRollDice(parsed);
+    if (!built.dice.length) continue;
+    await emitOneRoll({
+      dice: built.dice,
+      winnerIdx: built.winnerIdx,
+      modifier: totalModifier(parsed),
+      expression: formatExpr(parsed),
+      label,
+      itemId: tokenId || null,
+      hidden: opts.hidden,
+      rowStarts: built.rowStarts,
+      sameHighlight: built.sameHighlight,
+      collectiveId,
+    });
+    sent++;
+  }
+
+  if (sent > 0) {
+    setLocked(true);
+    if (animationTimer !== null) clearTimeout(animationTimer);
+    animationTimer = window.setTimeout(() => {
+      setLocked(false);
+      animationTimer = null;
+    }, ANIM_FALLBACK_MS);
+  }
+
+  // Clear the expression + label so the next roll starts fresh
+  // (per spec). The "上一次" button gets the saved expr back if needed.
+  setExpression("");
+  labelText = "";
+  labelInput.value = "";
+}
+
+// Combos tab roll. Same flow as performRoll — the panel just builds
+// dice + broadcasts. The button passed in receives the failure shake
+// so feedback stays attached to the actual click target.
+/** Doubles the count of every NdM term in a dice expression (1d8 →
+ *  2d8, 2d6 → 4d6). The modifier and any non-dice tokens are left
+ *  untouched. Used by the combo card's 重击 button to apply 5e crit
+ *  damage rules without mutating the saved expression. */
+function doubleDiceCounts(expr: string): string {
+  return expr.replace(
+    /(\d*)d(\d+)/gi,
+    (_m, count: string, sides: string) => {
+      const c = count ? parseInt(count, 10) : 1;
+      return `${c * 2}d${sides}`;
+    },
+  );
+}
+
+async function rollFromCombo(
+  expr: string,
+  label: string,
+  opts: { hidden?: boolean } = {},
+  sourceBtn?: HTMLButtonElement,
+): Promise<void> {
+  const hidden = opts.hidden ?? false;
+  const btnSelf = sourceBtn ?? btnRoll;
+  if (isAnimating) {
+    shakeButtonWithReason(btnSelf, tt("diceShakeAnim"));
+    return;
+  }
+  const parsed = parseExpr(expr);
+  if (exprIsEmpty(parsed)) {
+    shakeButtonWithReason(btnSelf, tt("diceShakeParse"));
+    return;
+  }
+
+  let targetTokens = await getOwnedSelectedTokenIds();
+  if (!hidden && targetTokens.length === 0) {
+    shakeButtonWithReason(btnSelf, tt("diceShakeNoToken"));
+    return;
+  }
+  // Dark roll: tokens optional — DM can dark-roll a combo with no
+  // selection (anchored at viewport center on their client only).
+  if (hidden && targetTokens.length === 0) {
+    targetTokens = [""];
+  }
+
+  lastRolledExpression = expr;
+  saveLastExpr(expr);
+  btnLastRoll.disabled = false;
+
+  // Camera focus BEFORE broadcasting (skip when there's no real token
+  // for dark-roll-with-no-selection).
+  const focusIds = targetTokens.filter((id) => id);
+  if (focusIds.length) focusCameraOnTokens(focusIds);
+
+  // §9 — same single-target fixed-result hook as performRoll (combo
+  // 投掷/暗骰/重击 all land here; 重击 already doubled the counts in
+  // `expr`, so the fixed build sees the doubled structure).
+  const fixedBuilt = await maybeConsumeFixedForPanel(parsed, targetTokens.length, "combo-roll");
+
+  const collectiveId = `col-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  let sent = 0;
+  for (const tokenId of targetTokens) {
+    const built = fixedBuilt ?? buildOneRollDice(parsed);
+    if (!built.dice.length) continue;
+    await emitOneRoll({
+      dice: built.dice,
+      winnerIdx: built.winnerIdx,
+      modifier: totalModifier(parsed),
+      expression: formatExpr(parsed),
+      label,
+      itemId: tokenId || null,
+      hidden,
+      rowStarts: built.rowStarts,
+      sameHighlight: built.sameHighlight,
+      collectiveId,
+    });
+    sent++;
+  }
+
+  if (sent > 0) {
+    setLocked(true);
+    if (animationTimer !== null) clearTimeout(animationTimer);
+    animationTimer = window.setTimeout(() => {
+      setLocked(false);
+      animationTimer = null;
+    }, ANIM_FALLBACK_MS);
+  }
+}
+
+function saveCurrentCombo() {
+  const parsed = parseExpr(expression);
+  if (exprIsEmpty(parsed)) return;
+  const promptName = labelText.trim() || formatExpr(parsed);
+  const name = window.prompt(tt("diceComboPrompt"), promptName);
+  if (!name) return;
+  // Optional category — show the existing list as a hint so users
+  // don't have to remember the exact spelling.
+  const hintList = categoryOrder.length > 0
+    ? `\n（${categoryOrder.join(" / ")}）`
+    : "";
+  const cat = window.prompt(tt("diceComboCatPrompt") + hintList, "");
+  // Cancel of the category prompt is treated as "uncategorized" — it
+  // would be jarring to abort the save just because the user didn't
+  // want a category.
+  const trimmedCat = (cat ?? "").trim().slice(0, 32);
+  if (trimmedCat && !categoryOrder.includes(trimmedCat)) {
+    categoryOrder.push(trimmedCat);
+  }
+  const combo: SavedCombo = {
+    id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+    name: name.trim().slice(0, 40),
+    expr: expression,
+    category: trimmedCat || undefined,
+  };
+  combos.unshift(combo);
+  saveCombos();
+  switchTab("combos");
+}
+
+function clearAll() {
+  setExpression("");
+  labelText = "";
+  labelInput.value = "";
+}
+
+// --- Wire events ---
+
+// Dice buttons on the row (excluding the d20-box's children which are
+// also .dice-btn but already rendered in HTML).
+diceRow.querySelectorAll<HTMLButtonElement>(".dice-btn[data-type]").forEach((b) => {
+  const type = b.dataset.type as DiceType;
+  b.addEventListener("click", () => adjustExprForType(type, +1));
+  b.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    adjustExprForType(type, -1);
+  });
+});
+
+// Adv / Dis: WRAP every dice term currently in the expression with
+// adv(...) / dis(...). Empty input → defaults to adv(1d20) / dis(1d20).
+// Wrapping is per-segment so `1d20+1d6` becomes `adv(1d20)+adv(1d6)`,
+// each die getting its own independent advantage. Already-wrapped
+// segments get their adv/dis kind toggled (adv→dis, dis→adv) instead
+// of double-wrapping. Other wrappers (max/min/reset/same/burst) are
+// preserved underneath the new adv/dis.
+function applyAdvWrap(kind: "adv" | "dis") {
+  const parsed = parseExpr(expression);
+  if (exprIsEmpty(parsed)) {
+    setExpression(`${kind}(1d20)`);
+    return;
+  }
+  const next: ParsedSegment[] = [];
+  // Each existing segment: replace any outermost adv/dis with the new
+  // kind (or push a fresh one if none).
+  for (const seg of parsed.segments) {
+    const ws = [...seg.wrappers];
+    const advIdx = ws.length - 1 - [...ws].reverse().findIndex(
+      (w) => w.kind === "adv" || w.kind === "dis",
+    );
+    if (advIdx >= 0 && advIdx < ws.length) {
+      ws[advIdx] = { kind, param: ws[advIdx].param ?? 1 };
+    } else {
+      ws.push({ kind, param: 1 });
+    }
+    next.push({ plain: seg.plain, wrappers: ws });
+  }
+  // outerPlain dice → wrap as a NEW segment under the chosen kind.
+  // outerPlain modifier stays outside (modifiers don't get advantage).
+  const outerHasDice = parsed.outerPlain.groups.length > 0;
+  let newOuter: PlainExpr = { groups: [], modifier: parsed.outerPlain.modifier };
+  if (outerHasDice) {
+    next.push({
+      plain: { groups: parsed.outerPlain.groups, modifier: 0 },
+      wrappers: [{ kind, param: 1 }],
+    });
+  }
+  setExpression(
+    formatExpr(finalizeParse({ segments: next, outerPlain: newOuter })),
+  );
+}
+
+btnAdv.addEventListener("click", () => applyAdvWrap("adv"));
+btnDis.addEventListener("click", () => applyAdvWrap("dis"));
+
+// 重击 — toggles dice-count doubling on the current expression. Pure
+// string transform: every `\d*d\d+` term has its count doubled (1d8 →
+// 2d8, 2d6 → 4d6). Modifier untouched. Re-clicking halves the count
+// back if the expression still looks doubled (best-effort heuristic:
+// if every NdM count is even, we revert by halving).
+btnCrit?.addEventListener("click", () => {
+  const expr = exprInput.value.trim();
+  if (!expr) return;
+  const terms = [...expr.matchAll(/(\d*)d(\d+)/gi)];
+  const allEven =
+    terms.length > 0 &&
+    terms.every(([, c]) => {
+      const n = c ? parseInt(c, 10) : 1;
+      return n > 0 && n % 2 === 0;
+    });
+  const transformed = expr.replace(
+    /(\d*)d(\d+)/gi,
+    (_m, count: string, sides: string) => {
+      const c = count ? parseInt(count, 10) : 1;
+      const next = allEven ? Math.max(1, Math.floor(c / 2)) : c * 2;
+      return `${next}d${sides}`;
+    },
+  );
+  setExpression(transformed);
+  if (btnCrit) btnCrit.classList.toggle("on", !allEven);
+});
+
+// ± buttons next to the expression input. Bumps the flat modifier
+// by 1 so the user can dial in attack/save/skill bonuses without
+// retyping the whole expression.
+document.getElementById("btnModInc")?.addEventListener("click", () => {
+  adjustExprModifier(+1);
+  exprInput.focus();
+});
+document.getElementById("btnModDec")?.addEventListener("click", () => {
+  adjustExprModifier(-1);
+  exprInput.focus();
+});
+
+exprInput.addEventListener("input", () => {
+  expression = exprInput.value;
+  refreshBadges();
+});
+
+// Enter to roll (no Shift required — single-line input).
+// Auto-close `(` with `)` and place the caret between them so the
+// player can keep typing the inner expression. Half-width and full-
+// width parens are both handled.
+exprInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    // Honour 全局暗骰 — same gate as the btnRoll click handler so
+    // pressing Enter inside the expression input has identical semantics.
+    performRoll({ hidden: getGlobalDarkRoll() });
+    return;
+  }
+  if (e.key === "(" || e.key === "（") {
+    e.preventDefault();
+    const start = exprInput.selectionStart ?? exprInput.value.length;
+    const end = exprInput.selectionEnd ?? start;
+    const v = exprInput.value;
+    const insertOpen = e.key === "（" ? "(" : "(";
+    exprInput.value = v.slice(0, start) + insertOpen + ")" + v.slice(end);
+    const caret = start + 1;
+    exprInput.setSelectionRange(caret, caret);
+    expression = exprInput.value;
+    refreshBadges();
+    return;
+  }
+  if (e.key === ")" || e.key === "）") {
+    // If the next char is already ")", just step over it (don't double-
+    // insert) — feels natural after auto-close.
+    const start = exprInput.selectionStart ?? 0;
+    const end = exprInput.selectionEnd ?? start;
+    if (start === end && exprInput.value[start] === ")") {
+      e.preventDefault();
+      exprInput.setSelectionRange(start + 1, start + 1);
+    }
+  }
+});
+labelInput.addEventListener("input", () => {
+  labelText = labelInput.value;
+});
+
+// Roll button. When the DM has the 全局暗骰 toggle on, the regular
+// 投掷 click also routes through dark-roll. Saves the DM from
+// remembering to click 暗骰 every time during a long stealth section.
+btnRoll.addEventListener("click", () => {
+  performRoll({ hidden: getGlobalDarkRoll() });
+});
+
+// Dark-roll button (DM-only — visibility wired up in OBR.onReady).
+const btnDarkRoll = document.getElementById("btnDarkRoll") as HTMLButtonElement | null;
+btnDarkRoll?.addEventListener("click", () => {
+  performRoll({ hidden: true });
+});
+
+// 2026-05-14 — DM-only "全局暗骰" toggle. Persists to LS_GLOBAL_DARK_ROLL
+// and visually reflects via the .on class so the DM sees current state
+// at a glance. Affects: btnRoll above + each combo card's 投掷 action
+// (data-act="roll") + the combo card's 重击 (also a non-dark roll).
+const btnDarkRollGlobal = document.getElementById("btnDarkRollGlobal") as HTMLButtonElement | null;
+function refreshDarkRollGlobalBtn(): void {
+  if (!btnDarkRollGlobal) return;
+  const on = getGlobalDarkRoll();
+  btnDarkRollGlobal.classList.toggle("on", on);
+  // The text changes between "全局暗骰: 关 / 开" so the toggle state
+  // is obvious without relying on subtle colour changes.
+  btnDarkRollGlobal.textContent = on
+    ? tt("diceBtnDarkRollGlobalOn")
+    : tt("diceBtnDarkRollGlobalOff");
+}
+btnDarkRollGlobal?.addEventListener("click", () => {
+  setGlobalDarkRoll(!getGlobalDarkRoll());
+  refreshDarkRollGlobalBtn();
+});
+refreshDarkRollGlobalBtn();
+
+// §9 — 固定下次 arm/disarm. GM-only row (visibility set in the onReady
+// role block). Clicking with a value arms the one-shot fix; clicking
+// while armed cancels it. The background iframe consumes the arm for
+// quick-rolls, which fires a cross-iframe `storage` event → refresh.
+const btnFixedRoll = document.getElementById("btnFixedRoll") as HTMLButtonElement | null;
+btnFixedRoll?.addEventListener("click", () => {
+  if (!isDM) return;
+  const inp = document.getElementById("fixedRollValue") as HTMLInputElement | null;
+  if (readFixedRoll()) {
+    disarmFixedRoll();
+    console.info("[obr-suite/dice-panel] fixed roll disarmed");
+    refreshFixedRollUi();
+    return;
+  }
+  const v = inp ? Math.floor(Number(inp.value)) : NaN;
+  if (!Number.isInteger(v)) {
+    shakeButtonWithReason(btnFixedRoll, lang !== "en" ? "请输入整数目标" : "Enter an integer target");
+    return;
+  }
+  if (armFixedRoll(v)) {
+    console.info("[obr-suite/dice-panel] fixed roll armed", { value: v });
+  }
+  refreshFixedRollUi();
+});
+window.addEventListener("storage", (e) => {
+  if (e.key === FIXED_ROLL_LS_KEY) refreshFixedRollUi();
+  if (e.key === LS_HISTORY) {
+    history = loadHistory();
+    renderHistorySeg();
+    renderHistoryList();
+  }
+});
+
+// 上一次: refill expression with the last successfully-rolled expr.
+// Does NOT auto-roll — user must click 投掷.
+btnLastRoll.addEventListener("click", () => {
+  if (!lastRolledExpression) return;
+  setExpression(lastRolledExpression);
+});
+btnLastRoll.disabled = !lastRolledExpression;
+
+btnSave.addEventListener("click", () => saveCurrentCombo());
+btnClear.addEventListener("click", () => clearAll());
+btnForceClr.addEventListener("click", () => forceClear());
+
+// Quick-fill example buttons under the rules-hint. Each carries
+// `data-expr` with a ready-made expression — clicking drops it into
+// the input so players can try things without memorising syntax.
+document.querySelectorAll<HTMLButtonElement>("#examplesRow .example-btn").forEach((b) => {
+  b.addEventListener("click", () => {
+    const expr = b.dataset.expr ?? "";
+    if (!expr) return;
+    setExpression(expr);
+    exprInput.focus();
+  });
+});
+
+btnClearHist.addEventListener("click", () => {
+  if (!confirm(tt("diceConfirmClearHistory"))) return;
+  // Close any active replay overlay before wiping history — otherwise
+  // the on-canvas bubbles would keep referencing a roll whose entry
+  // is gone, with no way for the user to dismiss them from this UI.
+  if (activeReplayCid) {
+    const cid = activeReplayCid;
+    setActiveReplayCid(null);
+    try {
+      OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "LOCAL" });
+      OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "REMOTE" });
+    } catch {}
+  }
+  history = [];
+  saveHistory();
+  renderHistorySeg();
+  renderHistoryList();
+});
+
+tabBtns.forEach((b) => {
+  b.addEventListener("click", () => switchTab(b.dataset.tab as typeof activeTab));
+});
+
+// --- Live history + lock-release subscriptions ---
+
+OBR.onReady(async () => {
+  // Per-room history key — rebuild after onReady so OBR.room.id is
+  // populated, then reload the panel's history slice from THIS room.
+  try {
+    const rid = (OBR.room?.id as string | undefined) ?? "";
+    LS_HISTORY = `${LS_HISTORY_BASE}:${safeRoomKey(rid)}`;
+    history = loadHistory();
+    if (activeTab === "history") renderHistoryList();
+    refreshBadges();
+  } catch {}
+
+  // The dice panel is the iframe the user clicks "投掷" in — its
+  // AudioContext warms up immediately and is the most reliable path
+  // for SFX broadcast playback.
+  subscribeToSfx();
+
+  // 2026-05-15 — pre-warm the webm-poster cache on idle so that by
+  // the time the user clicks the 皮肤 tab, every library chip is a
+  // cache hit (no extraction wait, no flicker, no main-thread
+  // stall). Sequential extraction in the background; bounded at
+  // O(unique webm count) total work spread across idle frames.
+  try {
+    const lib = await readMyLibrary();
+    prewarmWebmPosters(lib);
+  } catch { /* no library, no prewarm */ }
+
+  // Resolve role + this client's player id. Both feed into the
+  // dark-roll redact gate in the BROADCAST_DICE_ROLL listener below.
+  // (OBR.player.onChange would also re-resolve if the role ever
+  // flipped at runtime, but in practice it doesn't.)
+  try {
+    const role = await OBR.player.getRole();
+    isDM = role === "GM";
+  } catch {}
+  try {
+    myPlayerId = await OBR.player.getId();
+  } catch {}
+  renderHistorySeg();renderHistoryList();
+  const btnDark = document.getElementById("btnDarkRoll") as HTMLButtonElement | null;
+  if (btnDark) btnDark.style.display = isDM ? "" : "none";
+  // 2026-05-14 — 全局暗骰 toggle visibility mirrors btnDarkRoll. Both
+  // are DM-only; we also refresh the label in case localStorage flipped
+  // out-of-band (e.g., another panel page in the same client) between
+  // initial paint and OBR onReady.
+  const btnDarkGlobal = document.getElementById("btnDarkRollGlobal") as HTMLButtonElement | null;
+  if (btnDarkGlobal) {
+    btnDarkGlobal.style.display = isDM ? "" : "none";
+    refreshDarkRollGlobalBtn();
+  }
+  // 清空历史 hidden for non-GM (user request 2026-05-08). The wipe is
+  // local-only (history is in localStorage), but exposing the button
+  // to players invites accidental clears of their own scrollback.
+  if (btnClearHist) btnClearHist.style.display = isDM ? "" : "none";
+  // §9 — fixed-roll row mirrors the DM-only gating above.
+  refreshFixedRollUi();
+  // Re-render combos so the per-card 暗骰 button shows up for DM
+  // (initial paint ran before isDM was resolved).
+  renderCombos();
+
+  // Keep the skins tab fresh while it's the one on screen — a skin
+  // set via the right-click ATTACHMENT picker writes this player's
+  // metadata, which fires onChange here.
+  //
+  // 2026-05-15 — debounced. onChange ALSO fires for OUR OWN writes
+  // (every chip click → setActiveSkin → metadata write → onChange).
+  // A burst of chip clicks would otherwise pile up renderSkinsTab
+  // calls faster than Chrome could reclaim WebMediaPlayer slots from
+  // the previous render's active-thumb videos, blowing the 75-slot
+  // cap. The 80 ms scheduler window coalesces bursts into one paint.
+  OBR.player.onChange((p) => {
+    if (activeTab === "skins") scheduleRenderSkinsTab();
+    // §9/§7-family — keep the role LIVE. A demoted DM loses the
+    // dark-roll + fixed-roll controls immediately, and a stale fixed
+    // arm is cleared (consume sites re-verify with a fresh getRole
+    // anyway; this is the UI layer catching up).
+    const nowDM = p.role === "GM";
+    const viewerChanged=nowDM!==isDM||myPlayerId!==p.id;
+    myPlayerId=p.id;
+    if (nowDM !== isDM) {
+      isDM = nowDM;
+      if (!isDM) disarmFixedRoll();
+      if (btnDark) btnDark.style.display = isDM ? "" : "none";
+      if (btnDarkGlobal) btnDarkGlobal.style.display = isDM ? "" : "none";
+      if (btnClearHist) btnClearHist.style.display = isDM ? "" : "none";
+      refreshFixedRollUi();
+      renderCombos();
+    }
+    if(viewerChanged){history=loadHistory();if(activeReplayCid){void OBR.broadcast.sendMessage(BC_DICE_REPLAY,{cid:activeReplayCid,action:'close'},{destination:'LOCAL'});setActiveReplayCid(null);}renderHistorySeg();renderHistoryList();}
+  });
+
+  OBR.broadcast.onMessage(BROADCAST_DICE_ROLL, (event) => {
+    const data = event.data as DiceRollPayload | undefined;
+    if (!data || !Array.isArray(data.dice) || !data.rollId) return;
+    // 2026-05-10 fix — same dark-roll redact gate as history-page.ts.
+    // The bg's quick-roll fan-out sends hidden rolls to REMOTE so
+    // player clients can play SFX without seeing the values. Earlier
+    // comment here ("only the DM client receives those") was wrong:
+    // the dice action panel's own send path is LOCAL-only, but the
+    // cc-info / monster-info / dice-quick-popup tag clicks route
+    // through the bg, which DOES broadcast REMOTE. Without this
+    // gate, the action panel's history tab on a player client would
+    // store and render the dark roll values. We rely on `myPlayerId`
+    // / `isDM` (resolved earlier in this onReady block) to scope.
+    if (!canSeeDiceHistory(data,historyViewer())) {
+      return;
+    }
+    history=storedDiceHistory([data,...loadHistory(history)]);
+    saveHistory();
+    if (activeTab === "history") {
+      renderHistorySeg();
+      renderHistoryList();
+    }
+  });
+
+  // Right-click "添加到骰盘" — pre-fill the expression input AND the
+  // 备注 (label) field with the rollable's source name (e.g. the skill
+  // or save the user clicked on). We don't auto-roll; the user
+  // reviews and clicks 投掷.
+  OBR.broadcast.onMessage("com.obr-suite/dice-panel-fill", (event) => {
+    const data = event.data as {
+      expression?: string;
+      label?: string;
+    } | undefined;
+    if (!data || typeof data.expression !== "string") return;
+    setExpression(data.expression);
+    if (typeof data.label === "string" && data.label) {
+      labelInput.value = data.label;
+      labelText = data.label;
+    }
+    switchTab("roll");
+    setTimeout(() => exprInput.focus(), 50);
+    // Consume the localStorage fallback if the live broadcast got
+    // there first — keeps re-opens of the panel from re-applying it.
+    try { localStorage.removeItem("obr-suite/dice-pending-prefill"); } catch {}
+  });
+
+  OBR.broadcast.onMessage(BC_DICE_FADE_START, (event) => {
+    const data = event.data as { rollId?: string } | undefined;
+    // Only react to climaxes of rolls the PANEL itself spawned. Other
+    // sources (initiative, future modules) carry their own rollIds and
+    // shouldn't prematurely release the panel's lock.
+    if (!data?.rollId || !myActiveRollIds.has(data.rollId)) return;
+    myActiveRollIds.delete(data.rollId);
+    if (animationTimer !== null) {
+      clearTimeout(animationTimer);
+      animationTimer = null;
+    }
+    setLocked(false);
+  });
+
+  // Listen for the bottom-left history popover's row-click events.
+  // The popover sends { playerName } — we switch to History tab and
+  // pre-select that player as the segmented filter.
+  OBR.broadcast.onMessage(BC_DICE_HISTORY_FILTER, (event) => {
+    const data = event.data as { playerName?: string } | undefined;
+    if (!data || typeof data.playerName !== "string") return;
+    historyFilter = data.playerName;
+    switchTab("history");
+  });
+
+  // Replay overlay sync. Mirrors history-page.ts's listener — when the
+  // overlay closes (from another client / from the overlay itself /
+  // from the same row clicked twice), drop our own `replay-active`
+  // highlight so the row de-illuminates.
+  //
+  // 2026-05-10: also auto-switch to the history tab + scroll the
+  // matching row into view when an "open" arrives. Lets a click in
+  // the bottom-left history popover sync straight into the dice
+  // action panel's history view (instead of leaving the user to
+  // hunt for the highlighted row themselves).
+  OBR.broadcast.onMessage(BC_DICE_REPLAY, (event) => {
+    const data = event.data as { cid?: string; action?: string } | undefined;
+    if (!data?.cid) return;
+    if (data.action === "close") {
+      if (activeReplayCid === data.cid) {
+        setActiveReplayCid(null);
+        if (activeTab === "history") renderHistoryList();
+      }
+      return;
+    }
+    if (data.action === "open") {
+      setActiveReplayCid(data.cid);
+      // 2026-05-10: always switch tab + re-render even when activeTab
+      // was already "history" — the previous "only re-render if
+      // wasDifferent" branch missed the case where the panel had
+      // activeReplayCid stuck on a stale cid from a previous open
+      // that never reset, and the new open wouldn't visually update
+      // the highlight border.
+      if (activeTab !== "history") {
+        switchTab("history");   // calls renderHistoryList internally
+      } else {
+        renderHistoryList();
+      }
+      const targetCid = data.cid;
+      setTimeout(() => {
+        const sel = typeof CSS !== "undefined" && CSS.escape
+          ? CSS.escape(targetCid)
+          : targetCid.replace(/["\\]/g, "\\$&");
+        const row = document.querySelector<HTMLElement>(
+          `.entry[data-cid="${sel}"]`,
+        );
+        if (row) {
+          row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      }, 30);
+      return;
+    }
+    // Legacy "toggle" path — only fires from older sender clients.
+    if (activeReplayCid && activeReplayCid !== data.cid) {
+      setActiveReplayCid(data.cid);
+      if (activeTab === "history") renderHistoryList();
+    }
+  });
+});
+
+// Click a history row → toggle the replay overlay for that roll's
+// collective. The bottom-right history modal does the same; this lets
+// the user replay a roll without leaving the dice panel.
+//
+// 2026-05-14b — per-row delete (small × in top-right of each entry).
+// Clicks on the × intercept the row's replay-click via .entry-del
+// detection and remove every history entry sharing that cid (a
+// collective roll = one logical entry).
+historyList.addEventListener("click", (e) => {
+  const target = e.target as HTMLElement | null;
+  // Delete-button path runs FIRST so its presence inside .entry doesn't
+  // double-fire as a row click + replay open.
+  const delBtn = target?.closest<HTMLElement>(".entry-del");
+  if (delBtn) {
+    e.stopPropagation();
+    e.preventDefault();
+    const cid = delBtn.dataset.cid;
+    if (!cid) return;
+    // If this row's replay is currently open, close it before removing
+    // the entry so the floating bubbles don't reference a deleted cid.
+    if (activeReplayCid === cid) {
+      setActiveReplayCid(null);
+      try {
+        OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "LOCAL" });
+        OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "REMOTE" });
+      } catch {}
+    }
+    // A collective roll has multiple entries with the same cid; remove
+    // them all so the visual row disappears in one click.
+    history = history.filter((h) => (h.collectiveId ?? h.rollId) !== cid);
+    saveHistory();
+    renderHistorySeg();
+    renderHistoryList();
+    return;
+  }
+
+  const item = target?.closest<HTMLElement>(".entry");
+  if (!item) return;
+  const cid = item.dataset.cid;
+  if (!cid) return;
+  // Send EXPLICIT open / close instead of "toggle" so receivers that
+  // had a stale local state (history popover never got our previous
+  // toggle) all converge to the same state. Was the source of the
+  // "click twice to clear bubble" bug the user reported 2026-05-09.
+  const action = activeReplayCid === cid ? "close" : "open";
+  setActiveReplayCid(action === "open" ? cid : null);
+  renderHistoryList();
+  try {
+    OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action }, { destination: "LOCAL" });
+    OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action }, { destination: "REMOTE" });
+  } catch {}
+});
+
+// --- i18n bootstrap ---
+//
+// Apply translations to all elements with data-i18n* attributes, render
+// the rules-hint list (which has many lines so we keep it data-driven),
+// and re-render dynamic content when the user flips the language toggle
+// in Settings.
+function renderRulesList() {
+  const el = document.getElementById("rulesList") as HTMLElement | null;
+  if (!el) return;
+  const items = [
+    `<code>2d6 + 1d20 + 5</code>${tt("diceRule1")}`,
+    `<code>adv(1d20)</code>${tt("diceRule2")}`,
+    `<code>dis(1d20)</code>${tt("diceRule3")}`,
+    `<code>max(1d20, 10)</code>${tt("diceRule4")}`,
+    `<code>min(1d20, 15)</code>${tt("diceRule5")}`,
+    `<code>reset(1d20, 12)</code>${tt("diceRule6")}`,
+    `<code>resetmin(1d20, 5)</code>${tt("diceRuleResetMin")}`,
+    `<code>resetmax(1d20, 18)</code>${tt("diceRuleResetMax")}`,
+    `<code>repeat(3, 1d20+5)</code>${tt("diceRule7")}`,
+    `<code>same(2d20)</code>${tt("diceRule8")}`,
+    `<code>burst(2d6)</code>${tt("diceRule9")}`,
+    `${tt("diceRule10")} <code>1d7</code>、<code>1d600</code>${tt("diceRule10b")} <code>（）</code>${tt("diceRule10c")} <code>，</code>${tt("diceRule10d")}`,
+  ];
+  el.innerHTML = items.map((s) => `<li>${s}</li>`).join("");
+}
+
+function reapplyAllI18n() {
+  applyI18nDom(lang);
+  renderRulesList();
+  renderCombos();
+  renderHistorySeg();
+  renderHistoryList();
+  // Refresh the 全局暗骰 toggle text — applyI18nDom only handles
+  // elements with data-i18n attrs; this button's label is state-driven
+  // (on / off), so we update it explicitly.
+  refreshDarkRollGlobalBtn();
+}
+
+onLangChange((next) => {
+  lang = next;
+  reapplyAllI18n();
+});
+
+// --- Initial paint ---
+
+applyI18nDom(lang);
+renderRulesList();
+renderCombos();
+renderHistorySeg();
+renderHistoryList();
+refreshBadges();
+void renderSkinsTab();
+
+// 2026-05-10: cold-start "show history" handshake. The bottom-right
+// history popover sets this flag in localStorage right before it
+// broadcasts BC_PANEL_TOGGLE { open: true }. The panel mounts AFTER
+// the broadcast, so the live BC_DICE_REPLAY listener at the bottom
+// of this file misses the original "open" broadcast — without this
+// hook the panel would land on the default "roll" tab and the user
+// would have to find the highlighted row themselves.
+//
+// Consume + delete: a stale flag from a previous session must not
+// hijack the next manual panel open.
+try {
+  const pendingShowHistory =
+    localStorage.getItem("obr-suite/dice/pending-show-history") === "1";
+  if (pendingShowHistory) {
+    localStorage.removeItem("obr-suite/dice/pending-show-history");
+    if (activeReplayCid) {
+      switchTab("history");
+      // After-paint scroll so the now-highlighted row is in view.
+      const targetCid = activeReplayCid;
+      setTimeout(() => {
+        const sel = typeof CSS !== "undefined" && CSS.escape
+          ? CSS.escape(targetCid)
+          : targetCid.replace(/["\\]/g, "\\$&");
+        const row = document.querySelector<HTMLElement>(
+          `.entry[data-cid="${sel}"]`,
+        );
+        if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }, 30);
+    }
+  }
+} catch {}
+
+// Pick up a pending prefill written by the bg module just before
+// `OBR.action.open()`. Covers the cold-start case where the broadcast
+// from "添加到骰盘" raced ahead of this iframe's listener registration.
+//
+// New shape: JSON {expression, label}. Legacy shape: bare string with
+// just the expression — still parsed for back-compat with prefill
+// payloads stashed by older builds.
+try {
+  const pending = localStorage.getItem("obr-suite/dice-pending-prefill");
+  if (pending) {
+    let expression = pending;
+    let label = "";
+    if (pending.startsWith("{")) {
+      try {
+        const obj = JSON.parse(pending);
+        if (obj && typeof obj.expression === "string") expression = obj.expression;
+        if (obj && typeof obj.label === "string") label = obj.label;
+      } catch {}
+    }
+    setExpression(expression);
+    if (label) {
+      labelInput.value = label;
+      labelText = label;
+    }
+    switchTab("roll");
+    localStorage.removeItem("obr-suite/dice-pending-prefill");
+    setTimeout(() => exprInput.focus(), 50);
+  }
+} catch {}
+
+setInterval(() => {
+  if (activeTab === "history") renderHistoryList();
+}, 30_000);

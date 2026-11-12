@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>状态调色板</title>
+<!-- Google Fonts: Noto Color Emoji has comprehensive Unicode 14
+     coverage so newer glyphs (🪢 🪨 🫵 🪽 etc.) render even on
+     older Windows / mobile Safari. The crossorigin preconnect
+     speeds up the first paint; @font-face is the single weight we
+     need so total transfer stays small. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+
+/* Suite color palette (matches src/utils/debugOverlay + cc-fullscreen
+   tokens — solid colors only, no gradients, dark navy + accent
+   blue). */
+:root{
+  --bg:#1a1a2e;
+  --bg-card:#16213e;
+  --bg-strong:#0f1830;
+  --border:rgba(255,255,255,0.10);
+  --border-strong:rgba(255,255,255,0.18);
+  --text:#e6e8ee;
+  --text-dim:#9aa0b3;
+  --text-mute:#666b78;
+  --accent:#5dade2;
+  --accent-dim:#7ec8f0;
+  --warn:#c89251;
+  --red:#c0392b;
+  --green:#2ecc71;
+}
+
+html,body{
+  height:100%;width:100%;overflow:hidden;background:transparent;
+  color:var(--text);
+  /* Emoji fonts FIRST so colour-emoji glyphs (💘 ⚡ 🪨 ❄️ 😶‍🌫️ etc)
+     pick up Noto Color Emoji (loaded via Google Fonts) before
+     "Microsoft YaHei" / "Segoe UI" claim them as monochrome boxes.
+     CJK characters fall through to the system stack since the
+     emoji fonts don't cover those ranges. */
+  font-family:"Noto Color Emoji","Apple Color Emoji","Segoe UI Emoji","Twemoji Mozilla","EmojiOne Color",
+    -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;
+  user-select:none;
+}
+/* 2026-05-16 — `--panel-zoom` set live by status-tracker-page.ts
+   (baseline 340×544 from statusTracker/index.ts). */
+html{zoom:var(--panel-zoom, 1)}
+
+.card{
+  position:absolute;inset:0;
+  background:var(--bg);
+  border:1px solid var(--border-strong);
+  border-radius:10px;
+  display:flex;flex-direction:column;
+  box-shadow:0 8px 24px rgba(0,0,0,0.45);
+  overflow:hidden;
+}
+
+/* ====================================================================
+   HEADER — split into two rows. Row 1 = drag-handle + title +
+   close. Row 2 = edit toggle + JSON import/export. */
+.head{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px 6px 6px;
+  background:var(--bg-card);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.drag-handle{
+  flex-shrink:0;
+  width:18px;height:24px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:grab;
+  color:var(--text-mute);
+  opacity:0.65;
+  transition:opacity .12s, color .12s;
+  touch-action:none;
+  user-select:none;
+}
+.drag-handle:hover{opacity:1;color:var(--text)}
+.drag-handle.is-dragging{cursor:grabbing;opacity:1;color:var(--accent)}
+.drag-handle svg{width:12px;height:18px;display:block;pointer-events:none}
+
+.head .ttl{
+  flex:1;font-size:12.5px;font-weight:700;color:var(--accent-dim);
+  letter-spacing:0.3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.head .x{
+  background:transparent;border:1px solid var(--border);
+  color:var(--text-dim);
+  cursor:pointer;font-family:inherit;
+  width:22px;height:22px;padding:0;border-radius:4px;
+  font-size:13px;font-weight:600;
+}
+.head .x:hover{color:var(--text);border-color:var(--border-strong)}
+
+/* 2026-05-10: jelly toolbar — buttons fill the whole row with NO
+   gaps and NO rounded corners, sit flush against the toolbar
+   background, and use a glassy highlight overlay (the "果冻" feel)
+   instead of crisp 1-px borders. Highlights are pseudo-elements so
+   they don't interfere with the SVG / text inside the button. */
+.toolbar{
+  display:flex;align-items:stretch;
+  padding:0;
+  background:var(--bg-strong);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+/* 2026-05-10 flat-modern revision — gradients + ::before specular
+   highlights removed. Buttons now use plain solid colour fills with a
+   simple hover/on state, matching contemporary flat-design toolbars. */
+.toolbar button,
+.toolbar a.tb-link{
+  flex:1 1 0;
+  background:transparent;
+  border:none;
+  color:var(--text-dim);
+  cursor:pointer;font-family:inherit;
+  height:30px;padding:0 8px;border-radius:0;
+  font-size:11px;font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  position:relative;
+  transition:color .12s ease, background .12s ease;
+  text-decoration:none;
+}
+.toolbar button:hover,
+.toolbar a.tb-link:hover{
+  color:var(--text);
+  background:rgba(255,255,255,0.06);
+}
+.toolbar button.on{
+  color:var(--accent-dim);
+  background:rgba(93,173,226,0.18);
+}
+/* Optional inner separator line between toolbar groups (legacy
+   .tb-sp behaviour preserved by spreading with margin-left auto). */
+.toolbar .tb-sp{
+  flex:0 0 1px;
+  background:rgba(255,255,255,0.06);
+  align-self:stretch;
+  margin:4px 0;
+}
+/* Edit-mode active state — make the toolbar's ✎ button visually
+   "alive" so the user always sees they're in editing context. The
+   button gets a breathing accent glow + a label suffix; the panel
+   border shifts to the warn-orange accent and pulses softly. */
+.toolbar #btnEdit.on{
+  animation: edit-btn-pulse 1.6s ease-in-out infinite;
+  background:rgba(93,173,226,0.16);
+}
+.toolbar #btnEdit.on::after{
+  content:"…";
+  margin-left:2px;
+  color:var(--warn);
+  animation: edit-btn-dots 1.2s steps(3, end) infinite;
+}
+@keyframes edit-btn-pulse{
+  0%,100%{
+    box-shadow:0 0 0 0 rgba(93,173,226,0.55), inset 0 0 0 0 rgba(93,173,226,0);
+  }
+  50%{
+    box-shadow:0 0 0 4px rgba(93,173,226,0), inset 0 0 8px 0 rgba(93,173,226,0.30);
+  }
+}
+@keyframes edit-btn-dots{
+  0%,33%   { content:"."; }
+  34%,66%  { content:".."; }
+  67%,100% { content:"..."; }
+}
+/* Panel border + header band cue while editing. The card itself
+   gets an animated warn-orange outline, and a thin progress-style
+   stripe paints across the top of the toolbar so the editing
+   context is unmistakable even when the ✎ button is scrolled out
+   of sight. */
+body.edit-mode .card{
+  border-color:var(--warn);
+  animation: edit-card-glow 2.4s ease-in-out infinite;
+}
+@keyframes edit-card-glow{
+  0%,100%{ box-shadow:0 8px 24px rgba(0,0,0,0.45), 0 0 0 0 rgba(200,146,81,0.55); }
+  50%   { box-shadow:0 8px 24px rgba(0,0,0,0.45), 0 0 18px 2px rgba(200,146,81,0.45); }
+}
+body.edit-mode .toolbar{
+  position:relative;
+  overflow:hidden;
+}
+body.edit-mode .toolbar::before{
+  content:"";
+  position:absolute;
+  left:-30%; right:-30%; top:0; height:2px;
+  background:linear-gradient(90deg,
+    transparent 0%,
+    rgba(200,146,81,0) 20%,
+    rgba(200,146,81,0.85) 50%,
+    rgba(200,146,81,0) 80%,
+    transparent 100%);
+  animation: edit-stripe 2.4s linear infinite;
+  pointer-events:none;
+}
+@keyframes edit-stripe{
+  0%   { transform:translateX(-30%); }
+  100% { transform:translateX(30%); }
+}
+body.edit-mode .head .ttl::after{
+  content:" · 编辑中";
+  color:var(--warn);
+  font-weight:700;
+  letter-spacing:0.4px;
+  animation: edit-title-fade 1.6s ease-in-out infinite;
+}
+@keyframes edit-title-fade{
+  0%,100%{ opacity:0.55; }
+  50%   { opacity:1; }
+}
+.toolbar button svg,
+.toolbar .tb-link svg{
+  /* The .tb-link is an <a>, not a <button> — without listing it here
+     its <svg> (viewBox-only, no width/height attrs) renders at the
+     browser default size and blows the toolbar row out / wraps it. */
+  width:13px;height:13px;flex-shrink:0;
+  pointer-events:none;
+}
+/* tb-sp width override — see .toolbar .tb-sp at the top for the jelly version. */
+
+/* ====================================================================
+   PRESETS BAR (2026-05-15). One chip per saved preset — click for the
+   action menu (overwrite-all / merge-all / delete), drag for per-token
+   drop. Lives between the toolbar and the filters. */
+.presets-bar{
+  display:flex;flex-wrap:wrap;align-items:center;gap:4px;
+  padding:5px 8px;
+  background:rgba(0,0,0,0.20);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  min-height:30px;
+  position:relative;
+}
+.presets-bar .presets-lbl{
+  font-size:9.5px;color:var(--text-dim);letter-spacing:0.5px;
+  font-weight:700;text-transform:uppercase;
+  padding:0 4px 0 0;
+}
+.presets-bar .presets-empty{
+  font-size:10.5px;color:var(--text-mute);
+  letter-spacing:0.2px;
+  flex:1;
+}
+.presets-bar .preset-chip{
+  display:inline-flex;align-items:center;gap:3px;
+  padding:2px 4px 2px 8px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  font-size:11px;color:var(--text);font-family:inherit;
+  cursor:pointer;user-select:none;
+  transition:background .12s,border-color .12s;
+}
+.presets-bar .preset-chip:hover{
+  background:rgba(93,173,226,0.16);
+  border-color:rgba(93,173,226,0.42);
+}
+.presets-bar .preset-chip .pre-count{
+  font-size:9.5px;color:var(--text-dim);
+  font-family:ui-monospace,Consolas,monospace;
+  padding:0 4px;
+  background:rgba(255,255,255,0.06);
+  margin-left:2px;
+}
+.presets-bar .preset-save{
+  margin-left:auto;
+  background:rgba(46,204,113,0.18);
+  border:1px solid rgba(46,204,113,0.45);
+  color:#7be0a0;font-size:11px;font-family:inherit;font-weight:700;
+  padding:3px 9px;cursor:pointer;
+  transition:background .12s,color .12s;
+}
+.presets-bar .preset-save:hover{
+  background:rgba(46,204,113,0.30);color:#a8efb8;
+}
+.preset-menu{
+  position:absolute;z-index:30;
+  background:var(--bg);
+  border:1px solid var(--border-strong);
+  box-shadow:0 8px 24px rgba(0,0,0,0.55);
+  display:flex;flex-direction:column;
+  min-width:170px;
+  font-size:11.5px;
+}
+.preset-menu button{
+  background:transparent;border:none;color:var(--text);
+  font-family:inherit;font-size:11.5px;font-weight:600;
+  padding:7px 12px;text-align:left;cursor:pointer;
+  border-bottom:1px solid var(--border);
+  transition:background .12s,color .12s;
+}
+.preset-menu button:last-child{border-bottom:none}
+.preset-menu button:hover{background:rgba(93,173,226,0.20);color:#7ec8f0}
+.preset-menu button.danger:hover{background:rgba(231,76,60,.20);color:#ff7a6b}
+
+/* ====================================================================
+   FILTERS (apply-mode = category filter row; edit-mode = editable
+   category buttons + a "+" affordance for adding a new category).
+   The same row morphs between modes via class toggles.
+   2026-05-10: jelly UI — buttons fill the row with no gaps / no
+   borders, share the toolbar's specular highlight pattern. */
+.filters{
+  display:flex;flex-wrap:wrap;
+  padding:0;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  align-items:stretch;
+}
+/* Flat tabs with a 2-px accent underline for the active state — much
+   cleaner than the prior glossy ::before highlight. */
+.cat-btn{
+  flex:1 1 0;
+  background:transparent;
+  border:none;
+  border-radius:0;
+  color:var(--text-dim);
+  font-family:inherit;font-size:10.5px;font-weight:600;
+  padding:6px 9px;
+  cursor:pointer;
+  letter-spacing:0.2px;
+  position:relative;
+  transition:color .12s ease, background .12s ease;
+}
+.cat-btn:hover:not(.on){
+  color:var(--text);
+  background:rgba(255,255,255,0.04);
+}
+.cat-btn.on{
+  background:rgba(93,173,226,0.14);
+  color:var(--accent-dim);
+}
+.cat-btn.on::after{
+  content:"";
+  position:absolute;
+  left:0;right:0;bottom:0;height:2px;
+  background:var(--accent);
+}
+
+/* Edit-mode tweaks for category buttons */
+body.edit-mode .cat-btn[draggable="true"]{cursor:grab}
+body.edit-mode .cat-btn[draggable="true"]:active{cursor:grabbing}
+body.edit-mode .cat-btn[draggable="true"]{
+  border-color:var(--border-strong);
+  color:var(--text);
+}
+body.edit-mode .cat-btn[draggable="true"]:hover{
+  border-color:var(--accent);
+  color:var(--accent-dim);
+}
+body.edit-mode .cat-btn.dragging{opacity:0.45}
+body.edit-mode .cat-btn.drop-target{
+  border-color:var(--warn);
+  background:rgba(200,146,81,0.20);
+  color:var(--warn);
+}
+.cat-add{
+  background:var(--bg-strong);
+  border:1px dashed var(--accent);
+  color:var(--accent-dim);
+  font-family:inherit;font-size:13px;font-weight:700;
+  padding:0 10px;height:24px;border-radius:4px;cursor:pointer;
+  letter-spacing:0;
+  display:inline-flex;align-items:center;justify-content:center;
+  line-height:1;
+}
+.cat-add:hover{
+  background:var(--bg-card);
+  color:var(--text);
+}
+.cat-input{
+  background:var(--bg-strong);
+  border:1px solid var(--accent);
+  color:var(--text);
+  font-family:inherit;font-size:10.5px;font-weight:600;
+  padding:0 7px;height:24px;border-radius:4px;
+  outline:none;
+  width:90px;
+}
+.cat-input:focus{
+  border-color:var(--accent-dim);
+  box-shadow:0 0 0 1px var(--accent);
+}
+
+/* ====================================================================
+   BODY GRID — flat flex wrap of buff bubbles. 2026-05-10 jelly spec:
+   NO gaps anywhere (gap:0), NO rounded corners on bubbles, every
+   bubble is `flex: 1 1 <minWidth>` so the row's remaining empty
+   space is shared between bubbles to make each row stretch FULL
+   WIDTH with no trailing gap. Padding on .body is also 0 so the
+   first row touches the toolbar above and the last row sits flush
+   on the bottom edge. */
+.body{
+  flex:1;overflow-y:auto;
+  padding:0;
+  display:flex;flex-wrap:wrap;gap:0;
+  align-content:flex-start;
+}
+.body::-webkit-scrollbar{width:5px}
+.body::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:3px}
+
+/* 2026-05-10 flat-modern bubble — every faux-3D effect (specular
+   highlight strip, inset highlight/shadow box-shadows) removed for a
+   contemporary minimalist look. Tile layout (no gaps, no rounded
+   corners, full-row stretch via `flex: 1 1 78px`) and the requested
+   80% colour transparency are preserved. */
+.bubble{
+  flex:1 1 78px;
+  display:inline-flex;align-items:center;justify-content:center;
+  height:25px;padding:0 8px;
+  border:none;border-radius:0;
+  font-size:11px;font-weight:700;
+  white-space:nowrap;
+  cursor:pointer;
+  user-select:none;
+  position:relative;
+  overflow:hidden;
+  /* 80%-opaque flat tint — `color-mix` blends the buff colour with
+     transparent to keep the toolbar background showing through. */
+  background:color-mix(in srgb, var(--bubble-bg, #555) 80%, transparent) !important;
+  transition:background .12s ease, opacity .12s ease;
+}
+/* Hover affordance: dim slightly via opacity (no brightness/saturate
+   filters that mimic the old glossy roll-over). */
+.bubble:hover{opacity:0.86}
+.bubble:active{opacity:0.74}
+.bubble.selected{
+  outline:2px solid rgba(255,255,255,0.78);
+  outline-offset:-2px;
+  opacity:1;
+}
+
+/* Eraser pill — full-width row, flat red 80%. */
+.bubble.eraser{
+  background:color-mix(in srgb, var(--red) 80%, transparent)!important;
+  color:#fff!important;
+  flex:0 0 100%;
+  justify-content:center;
+  height:28px;font-size:11.5px;letter-spacing:0.3px;
+}
+
+/* Manage pill — full-width row, flat warm 80%. */
+.bubble.manage{
+  background:color-mix(in srgb, var(--warn) 80%, transparent)!important;
+  color:#fff!important;
+  flex:0 0 100%;
+  justify-content:center;
+  height:28px;font-size:11.5px;letter-spacing:0.3px;
+}
+
+/* Edit-mode bubble interactions */
+body.edit-mode .bubble.editable{cursor:pointer}
+body.edit-mode .bubble.editable:hover{
+  filter:brightness(1.12);
+  outline:1px solid var(--accent);
+  outline-offset:1px;
+}
+body.edit-mode .bubble.dragging{opacity:0.4}
+body.edit-mode .bubble.drop-before{
+  box-shadow:-3px 0 0 0 var(--accent),0 1px 2px rgba(0,0,0,0.30);
+}
+body.edit-mode .bubble.drop-after{
+  box-shadow:3px 0 0 0 var(--accent),0 1px 2px rgba(0,0,0,0.30);
+}
+.bubble.add-pill{
+  background:transparent!important;
+  border:1px dashed var(--accent)!important;
+  color:var(--accent-dim)!important;
+  cursor:pointer!important;
+  box-shadow:none!important;
+  letter-spacing:0.3px;
+}
+.bubble.add-pill:hover{
+  background:var(--bg-card)!important;
+  color:var(--text)!important;
+  filter:none!important;
+}
+
+/* ====================================================================
+   FLOATING EDIT POPUP — pops near a clicked bubble in edit mode.
+   Color picker + name input + delete / cancel / save + experimental
+   effect mode picker. Pinned to the .card via absolute positioning
+   so it can't escape the panel. */
+.popup{
+  position:absolute;
+  z-index:50;
+  background:var(--bg-card);
+  border:1px solid var(--accent);
+  border-radius:6px;
+  padding:8px;
+  display:none;
+  flex-direction:column;
+  gap:6px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.55);
+  min-width:240px;
+  max-width:300px;
+}
+.popup.open{display:flex}
+.pop-row{display:flex;align-items:center;gap:6px}
+.pop-row.rounds{align-items:center}
+.pop-rounds-label{
+  flex:0 0 auto;
+  color:var(--text-mute);
+  font-size:10.5px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.pop-color{
+  flex-shrink:0;width:30px;height:28px;
+  padding:0;border:1px solid var(--border-strong);border-radius:4px;
+  background:transparent;cursor:pointer;
+}
+.pop-color::-webkit-color-swatch-wrapper{padding:1px}
+.pop-color::-webkit-color-swatch{border:none;border-radius:3px}
+.pop-name,.pop-rounds{
+  flex:1;
+  background:var(--bg-strong);
+  border:1px solid var(--accent);
+  color:var(--text);font-family:inherit;
+  font-size:11.5px;font-weight:700;
+  padding:0 8px;height:28px;border-radius:4px;
+  outline:none;
+  min-width:0;
+}
+.pop-rounds{width:72px;max-width:72px;box-sizing:border-box;text-align:center}
+.pop-name:focus,.pop-rounds:focus{
+  border-color:var(--accent-dim);
+  box-shadow:0 0 0 1px var(--accent);
+}
+
+/* Experimental effect-mode segmented toggle. Six pill-buttons in a
+   2×3 wrap — labelled with the Chinese name. Selected segment uses
+   the accent stripe. */
+.pop-fx-label{
+  font-size:9.5px;font-weight:700;color:var(--text-mute);
+  letter-spacing:0.6px;text-transform:uppercase;
+  padding:2px 0 0;
+}
+.pop-fx-row{
+  display:flex;flex-wrap:wrap;gap:3px;
+}
+.pop-fx-seg{
+  background:var(--bg-strong);
+  border:1px solid var(--border);
+  color:var(--text-dim);
+  font-family:inherit;font-size:10.5px;font-weight:600;
+  padding:3px 9px;border-radius:4px;
+  cursor:pointer;
+  letter-spacing:0.4px;
+  flex:1 1 30%;
+  text-align:center;
+  min-width:60px;
+}
+.pop-fx-seg:hover{color:var(--text);border-color:var(--border-strong)}
+.pop-fx-seg.on{
+  background:var(--bg-card);
+  border-color:var(--accent);
+  color:var(--accent-dim);
+  box-shadow:inset 0 -2px 0 0 var(--accent);
+}
+
+/* Per-effect image-URL row — only shown when an effect mode is
+   picked. URL input + asset-picker icon button. */
+.pop-img-row{gap:4px}
+.pop-img-url{
+  flex:1;
+  background:var(--bg-strong);
+  border:1px solid var(--accent);
+  color:var(--text);font-family:inherit;
+  font-size:10.5px;
+  padding:0 8px;height:28px;border-radius:4px;
+  outline:none;
+}
+.pop-img-url:focus{
+  border-color:var(--accent-dim);
+  box-shadow:0 0 0 1px var(--accent);
+}
+.pop-img-url::placeholder{
+  color:var(--text-mute);
+  opacity:0.7;
+}
+.pop-img-pick{
+  flex-shrink:0;
+  width:32px;height:28px;
+  padding:0;border-radius:4px;
+  background:transparent;
+  border:1px solid var(--border-strong);
+  color:var(--text-dim);
+  font-size:14px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.pop-img-pick:hover{
+  color:var(--text);
+  border-color:var(--accent);
+}
+
+/* ====================================================================
+   2026-05 — WebM-effect controls inside the buff edit popup.
+   Built-in buffs get a 2-way 无 / 默认特效 segmented toggle; custom
+   buffs get only the grey hint. The old prebuilt-variant library
+   modal + 更换 button were removed per user request. */
+.pop-webm-seg-row{
+  display:flex; gap:6px;
+  padding:2px 0;
+}
+.pop-webm-seg{
+  flex:1;
+  background:var(--bg-strong);
+  border:1px solid var(--border);
+  color:var(--text-dim);
+  font-family:inherit; font-size:11px; font-weight:700;
+  height:26px; padding:0 8px; border-radius:5px;
+  cursor:pointer;
+  transition:color .12s, border-color .12s, background .12s;
+}
+.pop-webm-seg:hover{ color:var(--text); border-color:var(--border-strong); }
+.pop-webm-seg.on{
+  background:var(--bg-card);
+  border-color:var(--accent);
+  color:var(--accent-dim);
+  box-shadow:inset 0 -2px 0 0 var(--accent);
+}
+.pop-webm-hint{
+  font-size:10px; line-height:1.5;
+  color:var(--text-mute);
+  padding:4px 0 2px;
+}
+
+.pop-actions{padding-top:1px}
+.pop-save,.pop-cancel,.pop-del{
+  background:transparent;
+  border:1px solid var(--border);
+  font-family:inherit;font-size:10.5px;font-weight:700;
+  height:24px;padding:0 10px;border-radius:4px;
+  cursor:pointer;
+}
+.pop-save{color:var(--green);border-color:rgba(46,204,113,0.45)}
+.pop-save:hover{color:#fff;background:var(--green);border-color:var(--green)}
+.pop-cancel{color:var(--text-dim)}
+.pop-cancel:hover{color:var(--text);border-color:var(--border-strong)}
+.pop-del{color:var(--red);border-color:rgba(192,57,43,0.45)}
+.pop-del:hover{color:#fff;background:var(--red);border-color:var(--red)}
+
+/* 2026-05-18 — hover-preview pane. Sits between the buff grid and
+   the footer; shows the actual webm / icon at a glance when the user
+   hovers a buff pill. Collapsed (height:0) when no buff is hovered
+   so the palette stays compact. */
+.buff-preview{
+  flex-shrink:0;
+  overflow:hidden;
+  border-top:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  /* 2026-05-18 — instant size transitions while the pane is
+     ARMED (.is-active); fade-only when it's DISARMING so the
+     content doesn't jump to height:0 mid-paint. */
+  max-height:0;
+  opacity:0;
+  transition:max-height 160ms ease, opacity 120ms ease;
+  display:flex;align-items:center;gap:10px;
+  padding:0 10px;
+}
+.buff-preview.is-active{
+  max-height:108px;
+  opacity:1;
+  padding:8px 10px;
+}
+.bp-media{
+  width:88px;height:88px;flex-shrink:0;
+  border-radius:6px;
+  /* Checkerboard so alpha buffs read clearly against either light
+     OR dark frames of the webm. */
+  background-image:
+    linear-gradient(45deg, rgba(255,255,255,0.07) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.07) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.07) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.07) 75%);
+  background-size:16px 16px;
+  background-position:0 0, 0 8px, 8px -8px, -8px 0;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.bp-media video,
+.bp-media img{
+  width:100%;height:100%;object-fit:contain;display:block;
+}
+.bp-label{
+  flex:1;min-width:0;
+  font-size:12px;color:var(--text);
+  line-height:1.4;
+  white-space:normal;
+}
+.bp-label .bp-name{font-weight:700;display:block;margin-bottom:2px}
+.bp-label .bp-hint{font-size:10px;color:var(--text-mute)}
+
+/* ====================================================================
+   FOOTER — multi-line per feature so each affordance reads on its
+   own row instead of being a long unwrapping run-on. */
+.foot{
+  padding:6px 10px;
+  border-top:1px solid var(--border);
+  font-size:9.5px;color:var(--text-mute);
+  flex-shrink:0;
+  line-height:1.55;
+  display:flex;flex-direction:column;gap:2px;
+}
+.foot-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.foot kbd{
+  background:var(--bg-strong);border:1px solid var(--border-strong);
+  border-radius:3px;padding:0 4px;font-family:ui-monospace,Consolas,monospace;
+  font-size:9px;color:var(--text);
+}
+.foot b{color:var(--text-dim)}
+.foot.edit-foot .foot-line b{color:var(--accent-dim)}
+
+/* JSON import file input is hidden — triggered by the button click. */
+#fileImport{display:none}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="head">
+    <div class="drag-handle" id="dragHandle" title="拖动 / Drag" aria-label="拖动调色板">
+      <svg viewBox="0 0 12 18" aria-hidden="true">
+        <circle cx="3" cy="3" r="1.2" fill="currentColor"/>
+        <circle cx="9" cy="3" r="1.2" fill="currentColor"/>
+        <circle cx="3" cy="9" r="1.2" fill="currentColor"/>
+        <circle cx="9" cy="9" r="1.2" fill="currentColor"/>
+        <circle cx="3" cy="15" r="1.2" fill="currentColor"/>
+        <circle cx="9" cy="15" r="1.2" fill="currentColor"/>
+      </svg>
+    </div>
+    <span class="ttl" data-i18n="stPaletteTitle">状态调色板</span>
+    <!-- 2026-05-16 — global render-mode toggle. 3 states: AUTO / 特效 /
+         文字. Click cycles. Affects every buff this client renders
+         on tokens regardless of per-buff settings. Per-client (stored
+         in localStorage), so each player can pick their own preference. -->
+    <button class="x" id="btnRenderMode" type="button" data-i18n-title="stRenderModeTitle" title="渲染模式：循环 自动 → 特效 → 文字 → 自动 …"
+            style="width:auto;padding:0 8px;font-size:11px;letter-spacing:0.5px">自动</button>
+    <button class="x" id="btnClose" type="button" data-i18n-title="stCloseTitle" title="关闭 (])">×</button>
+  </div>
+  <div class="toolbar">
+    <!-- Edit toggle. SVG = pencil icon, follows currentColor for the
+         on/off state colours. -->
+    <button id="btnEdit" type="button" data-i18n-title="stEditTitle" title="编辑 buff 库">
+      <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z"/>
+        <path d="M10.5 3.5l2 2"/>
+      </svg>
+      <span data-i18n="stEditLabel">编辑</span>
+    </button>
+    <span class="tb-sp"></span>
+    <!-- Export = download (arrow into tray) -->
+    <button id="btnExport" type="button" data-i18n-title="stExportTitle" title="导出 buff 库为 JSON">
+      <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2v8"/>
+        <path d="M4.5 7L8 10.5 11.5 7"/>
+        <path d="M3 13h10"/>
+      </svg>
+      <span data-i18n="stExportLabel">导出</span>
+    </button>
+    <!-- Import = upload (arrow out of tray) -->
+    <button id="btnImport" type="button" data-i18n-title="stImportTitle" title="导入 buff 库 JSON">
+      <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 11V3"/>
+        <path d="M4.5 6.5L8 3l3.5 3.5"/>
+        <path d="M3 13h10"/>
+      </svg>
+      <span data-i18n="stImportLabel">导入</span>
+    </button>
+    <span class="tb-sp"></span>
+    <!-- Buff Studio — external web tool for making buff-effect WebMs.
+         Status-tracker buffs render from WebM/image assets, so this is
+         where users go to author new ones. Opens in a new tab. -->
+    <a class="tb-link" href="https://obr.dnd.center/studio/buff-studio/" target="_blank" rel="noopener"
+       data-i18n-title="stStudioTitle"
+       title="打开 Buff Studio：在线制作 buff 特效（多图层合成 / GIF·视频转 WebM），导出后放进 buff 库">
+      <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.5l1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 11.2 4.8 12.9l.6-3.6L2.8 6.8l3.6-.5z"/>
+      </svg>
+      <span data-i18n="stStudioLabel">特效工坊</span>
+    </a>
+    <input id="fileImport" type="file" accept=".json,application/json"/>
+  </div>
+  <div class="filters" id="filters"></div>
+  <div class="body" id="grid"></div>
+  <!-- 2026-05-18 — hover-preview pane. JS toggles `.is-active` when
+       the user hovers a buff pill; the inner <video> / <img> swaps
+       to the corresponding webmAsset / iconAsset. Hidden by default
+       so empty-buff palettes don't waste space. -->
+  <div class="buff-preview" id="buff-preview" aria-hidden="true">
+    <div class="bp-media" id="bp-media"></div>
+    <div class="bp-label" id="bp-label"></div>
+  </div>
+  <div class="foot" id="foot">
+    <div class="foot-line"><b>左键</b>状态 = 选中；再点角色 = 应用 / 切换</div>
+    <div class="foot-line"><b>右键</b> = 取消当前选中</div>
+    <div class="foot-line"><b>左键</b>红色
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           style="vertical-align:-2px;margin:0 3px"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      = 选中清除；再点角色 = 清空</div>
+    <div class="foot-line"><b>管理</b> = 选中后点角色，打开该角色 buff 管理</div>
+    <div class="foot-line"><kbd>]</kbd> 关闭面板</div>
+  </div>
+  <div class="popup" id="popup"></div>
+</div>
+<script type="module" src="/src/status-tracker-page.ts"></script>
+</body>
+</html>

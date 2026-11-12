@@ -1,0 +1,278 @@
+import {DICE_HISTORY_LIMIT,canSeeDiceHistory,diceHistory,storedDiceHistory,type DiceHistoryVisibility} from './history-policy';
+import OBR from "@owlbear-rodeo/sdk";
+import { assetUrl } from "../../asset-base";
+import { DieResult, sidesOf } from "./types";
+
+// 2026-05-15 — i18n hint patch (was inline <script> in dice-replay.html,
+// blocked by OBR's plugin CSP `script-src-elem 'self'`). Module
+// scripts ARE allowed, so we run it here before the main module logic.
+try {
+  const v = localStorage.getItem("obr-suite/lang");
+  if (v === "en") {
+    document.documentElement.lang = "en";
+    const h = document.getElementById("hint");
+    if (h) h.textContent = "Click bubble or click row again to close";
+  }
+} catch { /* ignore */ }
+
+// Replay overlay modal — opens when a player clicks a row in the
+// dice-history popover. Reads localStorage history (shared key with
+// the panel + history popover), filters by collectiveId from URL,
+// and renders ONE compact "speech bubble" above each token's head:
+// dice icons + values + modifier + label + total, in the roller's
+// color.
+//
+// All clients that received the BC_DICE_REPLAY broadcast open this
+// modal — so EVERYONE sees the overlay on canvas. Closing is handled
+// by either:
+//   - clicking a bubble (this iframe broadcasts BC_DICE_REPLAY to
+//     toggle), or
+//   - the user clicking the same history row again (the history
+//     popover broadcasts the toggle directly), or
+//   - clicking a different row (the dice background closes this
+//     modal before opening the new one).
+
+const params = new URLSearchParams(location.search);
+const cid = params.get("cid") ?? "";
+
+// Per-room history key — see history-page.ts for rationale. Read
+// after OBR.onReady when room.id is available.
+const LS_HISTORY_BASE = "obr-suite/dice/history";
+function safeRoomKey(rid: string): string {
+  return rid.replace(/[^a-zA-Z0-9_-]/g, "_") || "default";
+}
+let LS_HISTORY = `${LS_HISTORY_BASE}:default`;
+const BC_DICE_REPLAY = "com.obr-suite/dice-replay";
+
+interface HistoryEntry {
+  itemId: string | null;
+  dice: DieResult[];
+  winnerIdx: number;
+  modifier: number;
+  label: string;
+  total: number;
+  rollerId: string;
+  rollerName: string;
+  rollerColor: string;
+  rollId: string;
+  ts: number;
+  hidden?: boolean;
+  visibility?: DiceHistoryVisibility;
+  collectiveId?: string;
+  // Mirrors `DiceRollPayload.rowStarts` — present when the roll was
+  // wrapped in `repeat(N, …)`. Each entry is the index in `dice[]`
+  // where the corresponding iteration starts. The tooltip renders
+  // these as vertical rows (one per iteration) instead of one
+  // grand-total line, per the user's spec for the floating
+  // "玩家头顶骰子记录悬浮框".
+  rowStarts?: number[];
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const v = localStorage.getItem(LS_HISTORY);
+    if (!v) return [];
+    const p = JSON.parse(v);
+    if (Array.isArray(p)) return diceHistory(p,{playerId:myPlayerId,role:myRole});
+  } catch {}
+  return [];
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+const STANDARD_TYPES = new Set(["d4", "d6", "d8", "d10", "d12", "d20", "d100"]);
+function imgFor(type: string): string {
+  return STANDARD_TYPES.has(type) ? type : "d100";
+}
+
+function chipsFor(slice: DieResult[]): string {
+  return slice.map((d) => {
+    const sides = sidesOf(d.type);
+    const cls =
+      d.loser ? "loser" :
+      d.value === sides ? "crit" :
+      d.value === 1 ? "fail" : "";
+    return `<span class="die ${cls}"><img src="${assetUrl(`${imgFor(d.type)}.png`)}" alt="">${d.value}</span>`;
+  }).join("");
+}
+
+function buildBubbleInner(entry: HistoryEntry): string {
+  const label = entry.label
+    ? `<div class="label">${escapeHtml(entry.label)}</div>`
+    : "";
+  const mod = entry.modifier !== 0
+    ? `<span class="mod">${entry.modifier > 0 ? `+${entry.modifier}` : entry.modifier}</span>`
+    : "";
+
+  // repeat(N, …): stack one row per iteration. No grand-total row,
+  // per user's spec — the tooltip shows each individual roll
+  // standalone instead of mashing them into a single line + sum.
+  const rows = entry.rowStarts ?? [];
+  if (rows.length > 1) {
+    const out: string[] = [];
+    for (let r = 0; r < rows.length; r++) {
+      const start = rows[r];
+      const end = r + 1 < rows.length ? rows[r + 1] : entry.dice.length;
+      const slice = entry.dice.slice(start, end);
+      const kept = slice.filter((d) => !d.loser);
+      // §9 consistency fix: subtraction dice count negative in row totals.
+      const rowSum = kept.reduce((a, d) => a + (d.subtract ? -d.value : d.value), 0) + entry.modifier;
+      out.push(
+        `<div class="row1 repeat-row">` +
+        `<span class="repeat-idx">#${r + 1}</span>` +
+        `${chipsFor(slice)}${mod}` +
+        `<span class="eq">=</span><span class="total">${rowSum}</span>` +
+        `</div>`,
+      );
+    }
+    return `${label}<div class="repeat-stack">${out.join("")}</div>`;
+  }
+
+  // Single roll (default).
+  return `${label}<div class="row1">${chipsFor(entry.dice)}${mod}<span class="eq">=</span><span class="total">${entry.total}</span></div>`;
+}
+
+const stage = document.getElementById("stage") as HTMLDivElement;
+const hint = document.getElementById("hint") as HTMLDivElement;
+
+interface OverlaySlot {
+  el: HTMLDivElement;
+  itemId: string;
+  entry: HistoryEntry;
+}
+const overlays: OverlaySlot[] = [];
+
+// Resolved at OBR.onReady time before buildOverlays runs.
+let myRole: "GM" | "PLAYER" = "PLAYER";
+let myPlayerId = "";
+
+function buildOverlays(): void {
+  for(const slot of overlays)slot.el.remove();overlays.length=0;
+  const history = loadHistory();
+  const members = history.filter((h) => h.collectiveId === cid || h.rollId === cid);
+  if (!members.length) {
+    // No data to replay — close immediately.
+    OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "LOCAL" }).catch(() => {});
+    return;
+  }
+  for (const entry of members) {
+    if (!entry.itemId) continue;       // tokenless dark roll → no anchor
+
+    // 2026-05-09: dark members in a mixed-collective replay must NOT
+    // leak to non-DM non-roller clients (they shouldn't even see a
+    // bubble exists). DM still gets a bubble but at reduced opacity
+    // so it visually distinguishes from the bright members.
+    const dimDark = !!entry.hidden && myRole === "GM";
+
+    const el = document.createElement("div");
+    el.className = "overlay";
+    const bubbleClass = dimDark ? "bubble dim-dark" : "bubble";
+    el.innerHTML = `<div class="${bubbleClass}" style="--player-color:${entry.rollerColor}">${buildBubbleInner(entry)}</div>`;
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Click any bubble → broadcast a close (LOCAL + REMOTE so all
+      // clients close together).
+      OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "LOCAL" }).catch(() => {});
+      OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "REMOTE" }).catch(() => {});
+    });
+    stage.appendChild(el);
+    overlays.push({ el, itemId: entry.itemId, entry });
+  }
+  // Edge case: every member was hidden and this client filtered them
+  // all out → no bubbles to show → close gracefully so the modal
+  // doesn't sit there empty.
+  if (overlays.length === 0) {
+    OBR.broadcast.sendMessage(BC_DICE_REPLAY, { cid, action: "close" }, { destination: "LOCAL" }).catch(() => {});
+  }
+}
+
+// --- Per-frame position update (anchor each overlay at its token's
+// top-of-head screen position; updates on viewport pan/zoom). ---
+let updateInFlight = false;
+let trackingActive = true;
+async function updatePositions(): Promise<void> {
+  if (updateInFlight) return;
+  updateInFlight = true;
+  try {
+    const ids = overlays.map((o) => o.itemId);
+    const [items, vp, scale, dpi] = await Promise.all([
+      OBR.scene.items.getItems(ids),
+      OBR.viewport.getPosition(),
+      OBR.viewport.getScale(),
+      OBR.scene.grid.getDpi().catch(() => 150),
+    ]);
+    const byId = new Map<string, any>();
+    for (const it of items) byId.set(it.id, it);
+    for (const o of overlays) {
+      const item = byId.get(o.itemId);
+      if (!item) {
+        o.el.style.display = "none";
+        continue;
+      }
+      o.el.style.display = "";
+      // Compute the token's top in world coords. Same logic the
+      // effect-page uses for its dice anchor.
+      let halfHeight = 75;
+      try {
+        const img = item.image;
+        const itemDpi = item.grid?.dpi;
+        const sy = item.scale?.y ?? 1;
+        if (img?.height && itemDpi && dpi) {
+          halfHeight = (img.height / itemDpi) * dpi * sy / 2;
+        } else if (dpi) {
+          halfHeight = dpi / 2;
+        }
+      } catch {}
+      const wx = item.position.x;
+      const wy = item.position.y - halfHeight;
+      const sx = wx * scale + vp.x;
+      const sy = wy * scale + vp.y;
+      o.el.style.left = `${sx}px`;
+      o.el.style.top = `${sy}px`;
+    }
+  } catch {}
+  updateInFlight = false;
+}
+
+function frame(): void {
+  if (!trackingActive) return;
+  updatePositions();
+  requestAnimationFrame(frame);
+}
+
+OBR.onReady(async () => {
+  // Resolve room-scoped history key BEFORE buildOverlays calls
+  // loadHistory(). Also resolve role + player id so the dark-member
+  // filter below can decide whether to render or skip each bubble.
+  try {
+    const rid = (OBR.room?.id as string | undefined) ?? "";
+    LS_HISTORY = `${LS_HISTORY_BASE}:${safeRoomKey(rid)}`;
+  } catch {}
+  try { myRole = (await OBR.player.getRole()) as "GM" | "PLAYER"; } catch {}
+  try { myPlayerId = await OBR.player.getId(); } catch {}
+  OBR.player.onChange(player=>{const changed=myRole!==player.role||myPlayerId!==player.id;myRole=player.role;myPlayerId=player.id;if(changed){buildOverlays();void updatePositions().then(()=>{for(const slot of overlays)slot.el.classList.add('show');});}});
+  buildOverlays();
+  await updatePositions();
+  // Reveal after first paint so overlays don't flash at (0,0).
+  requestAnimationFrame(() => {
+    for (const o of overlays) o.el.classList.add("show");
+    hint.classList.add("show");
+    setTimeout(() => hint.classList.remove("show"), 2400);
+  });
+  requestAnimationFrame(frame);
+
+  // External "close" broadcasts (history row clicked again, or another
+  // row clicked which kicks the existing replay before opening a new
+  // one). The dice background module orchestrates the actual modal
+  // close — this iframe just stops its rAF loop.
+  OBR.broadcast.onMessage(BC_DICE_REPLAY, () => {
+    trackingActive = false;
+  });
+});

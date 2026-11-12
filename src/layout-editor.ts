@@ -1,0 +1,526 @@
+// Panel-layout editor modal.
+//
+// Opened from Settings → 基础设置 → "调整面板布局". Renders a
+// fullscreen blocker with a draggable + resizable proxy rectangle for
+// every suite-anchored popover, regardless of whether each one is
+// currently displayed. Background.ts gathers each panel's bbox via
+// the registry (which now always returns the EXPECTED bbox even for
+// closed panels) and packs them into the modal URL hash so the
+// editor can render proxies on first paint.
+//
+// Features:
+//   * Drag any proxy to reposition. Position is clamped to the
+//     viewport so panels can't escape past an edge.
+//   * Drag the bottom-right corner handle to resize panels whose
+//     modules honour size overrides (dice-history / bestiary panel /
+//     cc-info / monster info). Cluster + initiative auto-fit their
+//     content and don't expose a resize handle.
+//   * "重置全部" wipes all per-panel offsets + sizes.
+//   * "完成" closes the editor.
+//
+// Both gestures finish by writing offset+size to localStorage and
+// firing BC_PANEL_DRAG_END so the underlying panel re-anchors live.
+
+import OBR from "@owlbear-rodeo/sdk";
+import {
+  PANEL_IDS,
+  setPanelOffset,
+  setPanelSize,
+  resetAllPanelOffsets,
+  BC_PANEL_DRAG_END,
+  BC_PANEL_RESET,
+  BC_LAYOUT_EDITOR_REFRESH,
+  BC_LAYOUT_EDITOR_BBOXES,
+  type PanelOffset,
+  type PanelSize,
+  type LayoutEditorBboxesPayload,
+} from "./utils/panelLayout";
+
+interface ProxyRect {
+  panelId: string;
+  label: string;
+  /** Currently-rendered bbox in modal-viewport coords. Live during
+   *  drag / resize; persisted to localStorage on release. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** Snapshot at gesture start, used to compute delta. */
+  startLeft: number;
+  startTop: number;
+  startWidth: number;
+  startHeight: number;
+  startOffset: PanelOffset;
+  startSize: PanelSize;
+  /** Whether this panel honours runtime size overrides — controls
+   *  whether the corner resize handle is rendered. */
+  resizable: boolean;
+  el: HTMLDivElement;
+}
+
+const blocker = document.getElementById("blocker") as HTMLDivElement;
+const hintEl = document.getElementById("hint") as HTMLElement;
+const btnReset = document.getElementById("btn-reset") as HTMLButtonElement;
+const btnDone = document.getElementById("btn-done") as HTMLButtonElement;
+
+const PANEL_LABELS: Record<string, string> = {
+  [PANEL_IDS.cluster]: "快捷键按钮",
+  [PANEL_IDS.clusterRow]: "快捷键栏",
+  [PANEL_IDS.diceHistory]: "投骰记录面板",
+  [PANEL_IDS.perfWindow]: "性能监视器",
+  [PANEL_IDS.initiative]: "先攻条",
+  [PANEL_IDS.bestiaryPanel]: "怪物图鉴",
+  [PANEL_IDS.bestiaryInfo]: "怪物详情",
+  [PANEL_IDS.ccInfo]: "角色卡信息",
+  [PANEL_IDS.search]: "搜索栏",
+  [PANEL_IDS.portalEdit]: "传送门编辑",
+  [PANEL_IDS.statusPalette]: "状态调色板",
+  [PANEL_IDS.hpBar]: "血条组件",
+  [PANEL_IDS.musicBoard]: "音乐板",
+};
+
+// Cluster + initiative auto-fit their inner content; runtime size
+// overrides would just be fought back by their own measure-and-resize
+// passes. Search is also self-resizing (idle/expanded states). Skip
+// the resize handle for these.
+const NON_RESIZABLE = new Set<string>([
+  PANEL_IDS.cluster,
+  PANEL_IDS.clusterRow,
+  PANEL_IDS.initiative,
+  PANEL_IDS.search,
+]);
+
+// 2026-05-16 — per-panel anchor origin (the screen-coord corner that
+// stays put when the panel resizes). The proxy's resize handle is at
+// its BOTTOM-RIGHT, so the proxy's top-left is the fixed point during
+// preview. If the panel's anchor doesn't also live at the top-left,
+// the panel will drift relative to the proxy after commit. We
+// compensate by adding a size-delta to the persisted offset whose
+// sign matches each non-top/non-left anchor edge.
+//
+// Mapping mirrors each module's `anchorOrigin` passed to
+// OBR.popover.open(). Anything not listed defaults to top-left (the
+// natural growth direction; matches the proxy's preview exactly).
+type AnchorH = "left" | "right";
+type AnchorV = "top" | "bottom";
+// `v` here represents "which edge is geometrically fixed when height
+// changes" — i.e. which edge stays put if we reopen the popover with
+// a different h but the SAME stored dy.
+//
+// For most panels this matches the OBR `anchorOrigin.vertical` exactly.
+// cc-info is the odd one out: it passes OBR `vertical: "TOP"` (so
+// OBR.popover.setHeight keeps the visual top fixed mid-session) but
+// its anchorPosition.top is computed as `desiredBottom - h + dy`. That
+// formula makes the iframe's actual TOP depend on h, so when the
+// layout-editor reopens with a different h, the TOP drifts unless we
+// add a heightDelta compensation to dy. From the resize-compensation
+// perspective that's effectively v:"bottom" — the BOTTOM is the
+// geometrically fixed edge here.
+const PANEL_ANCHOR: Record<string, { h: AnchorH; v: AnchorV }> = {
+  [PANEL_IDS.ccInfo]:         { h: "right", v: "bottom" }, // characterCards/index.ts — TOP-anchored but desiredBottom-h formula
+  [PANEL_IDS.bestiaryInfo]:   { h: "right", v: "top" },    // bestiary/index.ts
+  [PANEL_IDS.bestiaryPanel]:  { h: "right", v: "top" },    // bestiary/index.ts
+  [PANEL_IDS.diceHistory]:    { h: "right", v: "bottom" }, // dice/index.ts
+  [PANEL_IDS.perfWindow]:     { h: "left",  v: "top" },    // perfWindow/index.ts
+  [PANEL_IDS.statusPalette]:  { h: "left",  v: "top" },    // statusTracker/index.ts
+  [PANEL_IDS.hpBar]:          { h: "left",  v: "top" },    // hpBar/index.ts
+  [PANEL_IDS.musicBoard]:     { h: "right", v: "top" },    // musicBoard/index.ts — right-anchored
+  [PANEL_IDS.portalEdit]:     { h: "left",  v: "top" },    // portals/index.ts (CENTER → treat as left)
+};
+
+// Min size for resizable panels — smaller than this and the panels
+// become unusable.
+const MIN_W = 160;
+const MIN_H = 100;
+
+// 2026-05-16 — per-panel min sizes. The fallback (MIN_W / MIN_H) is
+// loose enough that some panels would break their internal layout if
+// shrunk all the way down (cc-info needs ~280 wide for the header
+// chips + ~220 tall for the stat banner; bestiary needs even more
+// because of the wide stat-block tables). Drag-resize is clamped to
+// these per-panel floors so the user can't drag a panel into a
+// non-functional state.
+const PANEL_MIN: Record<string, { w: number; h: number }> = {
+  [PANEL_IDS.ccInfo]:        { w: 280, h: 220 }, // header chips + stat banner
+  [PANEL_IDS.bestiaryInfo]:  { w: 380, h: 240 }, // stat-block tables don't wrap nicely
+  [PANEL_IDS.bestiaryPanel]: { w: 340, h: 280 }, // monster list rows + search input
+  [PANEL_IDS.diceHistory]:   { w: 280, h: 200 }, // row text + roll history scroll
+  [PANEL_IDS.perfWindow]:    { w: 220, h: 140 }, // small fps / mem readout
+  [PANEL_IDS.statusPalette]: { w: 220, h: 200 }, // buff palette grid
+  [PANEL_IDS.hpBar]:         { w: 200, h: 60 },  // single-line bar
+  [PANEL_IDS.musicBoard]:    { w: 300, h: 200 }, // now-playing + volume + pair
+  [PANEL_IDS.portalEdit]:    { w: 260, h: 200 }, // form fields
+};
+function minFor(panelId: string): { w: number; h: number } {
+  return PANEL_MIN[panelId] ?? { w: MIN_W, h: MIN_H };
+}
+
+const proxies: ProxyRect[] = [];
+
+interface DragSession {
+  proxy: ProxyRect;
+  pointerId: number;
+  startScreenX: number;
+  startScreenY: number;
+  mode: "move" | "resize";
+}
+let session: DragSession | null = null;
+
+function readStoredOffset(panelId: string): PanelOffset {
+  try {
+    const raw = localStorage.getItem(`obr-suite/panel-offset/${panelId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.dx === "number" && typeof parsed?.dy === "number") {
+        return { dx: parsed.dx, dy: parsed.dy };
+      }
+    }
+  } catch {}
+  return { dx: 0, dy: 0 };
+}
+
+function readStoredSize(panelId: string): PanelSize | null {
+  try {
+    const raw = localStorage.getItem(`obr-suite/panel-size/${panelId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.width === "number" && typeof parsed?.height === "number") {
+        return { width: parsed.width, height: parsed.height };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function clampToViewport(p: ProxyRect): void {
+  // Modal is fullScreen so window.innerWidth/Height === OBR viewport.
+  // Boundary clamp keeps the proxy fully on screen — user can still
+  // see and grab the handle. If a future feature wants "partial
+  // off-screen allowed" we can drop the lower bound to negative.
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // 2026-05-16 — per-panel min size first, then the viewport cap. The
+  // per-panel floor prevents drag-resize from breaking each panel's
+  // internal layout (cc-info needs ~280×220, bestiary needs ~380×240,
+  // etc. — see PANEL_MIN). Falls back to the loose MIN_W/MIN_H for
+  // any panel not in the table.
+  const m = minFor(p.panelId);
+  p.width = Math.max(m.w, Math.min(vw, p.width));
+  p.height = Math.max(m.h, Math.min(vh, p.height));
+  p.left = Math.max(0, Math.min(vw - p.width, p.left));
+  p.top = Math.max(0, Math.min(vh - p.height, p.top));
+}
+
+function applyProxyDom(p: ProxyRect): void {
+  p.el.style.left = `${Math.round(p.left)}px`;
+  p.el.style.top = `${Math.round(p.top)}px`;
+  p.el.style.width = `${Math.round(p.width)}px`;
+  p.el.style.height = `${Math.round(p.height)}px`;
+  const sizeEl = p.el.querySelector(".psize");
+  if (sizeEl) {
+    sizeEl.textContent = `${Math.round(p.width)} × ${Math.round(p.height)}`;
+  }
+}
+
+function isPanelOpen(panelId: string): boolean {
+  // Best effort — read the corresponding "is open" flag from
+  // localStorage where we have it. Cluster is presumed always open
+  // when the suite is active. The other panels don't expose a
+  // localStorage open-flag, so we treat them as "closed" for the
+  // purposes of the visual style only — the hash payload from
+  // background already tells us their bbox.
+  if (panelId === PANEL_IDS.cluster) return true;
+  return false;
+}
+
+function buildProxy(
+  panelId: string,
+  bbox: { left: number; top: number; width: number; height: number },
+): void {
+  const label = PANEL_LABELS[panelId] ?? panelId;
+  const resizable = !NON_RESIZABLE.has(panelId);
+  const open = isPanelOpen(panelId);
+  const el = document.createElement("div");
+  el.className = "proxy" + (open ? "" : " is-closed");
+  el.dataset.panelId = panelId;
+  el.innerHTML = `
+    <span class="pname">${label}</span>
+    <span class="psize">${Math.round(bbox.width)} × ${Math.round(bbox.height)}</span>
+    ${resizable ? '<div class="resize-handle"></div>' : ""}
+  `;
+  blocker.appendChild(el);
+
+  const proxy: ProxyRect = {
+    panelId,
+    label,
+    left: bbox.left,
+    top: bbox.top,
+    width: bbox.width,
+    height: bbox.height,
+    startLeft: bbox.left,
+    startTop: bbox.top,
+    startWidth: bbox.width,
+    startHeight: bbox.height,
+    startOffset: readStoredOffset(panelId),
+    startSize: readStoredSize(panelId) ?? { width: bbox.width, height: bbox.height },
+    resizable,
+    el,
+  };
+  applyProxyDom(proxy);
+  proxies.push(proxy);
+
+  // Move handler — pointerdown anywhere on the proxy except the
+  // resize handle (which gets its own listener that calls
+  // stopPropagation).
+  el.addEventListener("pointerdown", (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("is-dragging");
+    session = {
+      proxy,
+      pointerId: e.pointerId,
+      startScreenX: e.screenX,
+      startScreenY: e.screenY,
+      mode: "move",
+    };
+    proxy.startLeft = proxy.left;
+    proxy.startTop = proxy.top;
+    proxy.startOffset = readStoredOffset(panelId);
+  });
+
+  // Resize handle — only present on resizable panels. Stops
+  // propagation so the move handler doesn't also fire.
+  const resizeHandle = el.querySelector<HTMLDivElement>(".resize-handle");
+  if (resizeHandle) {
+    resizeHandle.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      resizeHandle.setPointerCapture(e.pointerId);
+      el.classList.add("is-resizing");
+      session = {
+        proxy,
+        pointerId: e.pointerId,
+        startScreenX: e.screenX,
+        startScreenY: e.screenY,
+        mode: "resize",
+      };
+      proxy.startWidth = proxy.width;
+      proxy.startHeight = proxy.height;
+      proxy.startOffset = readStoredOffset(panelId);
+      proxy.startSize = readStoredSize(panelId) ?? { width: proxy.width, height: proxy.height };
+    });
+  }
+
+  // Single set of pointermove / up / cancel handlers per element
+  // dispatching on session.mode.
+  const onMove = (e: PointerEvent) => {
+    if (!session || e.pointerId !== session.pointerId) return;
+    if (session.proxy !== proxy) return;
+    const dx = e.screenX - session.startScreenX;
+    const dy = e.screenY - session.startScreenY;
+    if (session.mode === "move") {
+      proxy.left = proxy.startLeft + dx;
+      proxy.top = proxy.startTop + dy;
+    } else {
+      proxy.width = proxy.startWidth + dx;
+      proxy.height = proxy.startHeight + dy;
+    }
+    clampToViewport(proxy);
+    applyProxyDom(proxy);
+  };
+
+  const onUp = (e: PointerEvent) => {
+    if (!session || e.pointerId !== session.pointerId) return;
+    if (session.proxy !== proxy) return;
+    const finishedMode = session.mode;
+    el.classList.remove("is-dragging");
+    el.classList.remove("is-resizing");
+    try { el.releasePointerCapture(e.pointerId); } catch {}
+    if (resizeHandle) {
+      try { resizeHandle.releasePointerCapture(e.pointerId); } catch {}
+    }
+    const dx = e.screenX - session.startScreenX;
+    const dy = e.screenY - session.startScreenY;
+    session = null;
+
+    if (finishedMode === "move") {
+      if (dx === 0 && dy === 0) return;
+      // Compute new offset from the CLAMPED final position so the
+      // panel's open() math agrees with what we drew.
+      const moveDx = proxy.left - proxy.startLeft;
+      const moveDy = proxy.top - proxy.startTop;
+      const next: PanelOffset = {
+        dx: proxy.startOffset.dx + moveDx,
+        dy: proxy.startOffset.dy + moveDy,
+      };
+      setPanelOffset(panelId, next);
+      try {
+        OBR.broadcast.sendMessage(
+          BC_PANEL_DRAG_END,
+          { panelId, offset: next },
+          { destination: "LOCAL" },
+        );
+      } catch {}
+    } else {
+      // Resize commit. Persist new size + send drag-end with both
+      // the offset and the new size so the panel re-anchors and
+      // re-sizes in one go.
+      //
+      // 2026-05-16 — anchor-aware offset compensation. The proxy
+      // grows from its top-left (the resize handle is bottom-right,
+      // so the user sees top-left stay fixed during drag). But each
+      // panel has its OWN anchor edge that stays fixed at its open
+      // call's anchorPosition — e.g. cc-info anchors bottom-right,
+      // so when its size grows but offset doesn't change, its
+      // top-left moves UP-LEFT, ending up to the left of the proxy's
+      // preview top-left. We add a size-delta to the offset for each
+      // non-top / non-left anchor edge to keep the actual panel's
+      // proxy-equivalent corner where the user saw it.
+      if (proxy.width === proxy.startWidth && proxy.height === proxy.startHeight) return;
+      const newSize: PanelSize = { width: proxy.width, height: proxy.height };
+      const widthDelta = proxy.width - proxy.startWidth;
+      const heightDelta = proxy.height - proxy.startHeight;
+      const anchor = PANEL_ANCHOR[panelId] ?? { h: "left" as AnchorH, v: "top" as AnchorV };
+      const offsetAfterResize: PanelOffset = {
+        dx: proxy.startOffset.dx + (anchor.h === "right" ? widthDelta : 0),
+        dy: proxy.startOffset.dy + (anchor.v === "bottom" ? heightDelta : 0),
+      };
+      setPanelSize(panelId, newSize);
+      // Only persist the new offset if we actually shifted it — keeps
+      // localStorage clean for top-left-anchored panels where resize
+      // doesn't move the persisted offset.
+      if (offsetAfterResize.dx !== proxy.startOffset.dx
+        || offsetAfterResize.dy !== proxy.startOffset.dy) {
+        setPanelOffset(panelId, offsetAfterResize);
+      }
+      try {
+        OBR.broadcast.sendMessage(
+          BC_PANEL_DRAG_END,
+          { panelId, offset: offsetAfterResize, size: newSize },
+          { destination: "LOCAL" },
+        );
+      } catch {}
+    }
+  };
+
+  el.addEventListener("pointermove", onMove);
+  el.addEventListener("pointerup", onUp);
+  el.addEventListener("pointercancel", onUp);
+  if (resizeHandle) {
+    resizeHandle.addEventListener("pointermove", onMove);
+    resizeHandle.addEventListener("pointerup", onUp);
+    resizeHandle.addEventListener("pointercancel", onUp);
+  }
+}
+
+OBR.onReady(() => {
+  let bboxMap: Record<string, { left: number; top: number; width: number; height: number }> = {};
+  try {
+    const raw = location.hash.replace(/^#/, "");
+    if (raw) {
+      bboxMap = JSON.parse(decodeURIComponent(raw));
+    }
+  } catch (e) {
+    console.warn("[layout-editor] failed to parse hash payload", e);
+  }
+  // Render proxies in a stable order so the DOM doesn't reshuffle
+  // when reopening (helps muscle-memory).
+  const order = [
+    PANEL_IDS.cluster,
+    PANEL_IDS.clusterRow,
+    PANEL_IDS.diceHistory,
+    PANEL_IDS.perfWindow,
+    PANEL_IDS.search,
+    PANEL_IDS.initiative,
+    PANEL_IDS.bestiaryPanel,
+    PANEL_IDS.bestiaryInfo,
+    PANEL_IDS.ccInfo,
+    PANEL_IDS.portalEdit,
+    PANEL_IDS.statusPalette,
+    PANEL_IDS.hpBar,
+    PANEL_IDS.musicBoard,
+  ];
+  for (const panelId of order) {
+    const bbox = bboxMap[panelId];
+    if (bbox && typeof bbox.left === "number") {
+      buildProxy(panelId, bbox);
+    }
+  }
+  if (proxies.length === 0) {
+    hintEl.textContent = "未读取到任何面板的位置信息";
+  } else {
+    hintEl.textContent = "拖动整体移动，拖右下角调整大小（虚线 = 当前未打开）";
+  }
+
+  // 2026-05-16 — listen for background's reply to the post-reset
+  // bbox refresh. Each proxy gets snapped to its NEW (= no-offset
+  // default) position + size; startLeft/Top/Width/Height also get
+  // rebased so the next drag computes deltas from the fresh
+  // baseline.
+  OBR.broadcast.onMessage(BC_LAYOUT_EDITOR_BBOXES, (event) => {
+    const payload = event.data as LayoutEditorBboxesPayload | undefined;
+    if (!payload?.bboxes) return;
+    for (const p of proxies) {
+      const fresh = payload.bboxes[p.panelId];
+      if (!fresh) continue;
+      p.left = fresh.left;
+      p.top = fresh.top;
+      p.width = fresh.width;
+      p.height = fresh.height;
+      p.startLeft = fresh.left;
+      p.startTop = fresh.top;
+      p.startWidth = fresh.width;
+      p.startHeight = fresh.height;
+      p.startOffset = { dx: 0, dy: 0 };
+      p.startSize = { width: fresh.width, height: fresh.height };
+      applyProxyDom(p);
+    }
+  });
+
+  btnReset.addEventListener("click", () => {
+    const ok = window.confirm("重置所有面板位置和大小到默认?");
+    if (!ok) return;
+    resetAllPanelOffsets();
+    try {
+      OBR.broadcast.sendMessage(BC_PANEL_RESET, {}, { destination: "LOCAL" });
+    } catch {}
+    // 2026-05-16 — ask background for fresh bboxes. Earlier this
+    // path snapped proxies back to their open-time startLeft/Top —
+    // but the bbox provider for cc-info / others factors `userOff`
+    // into the bbox, so startLeft/Top were the OFFSET-APPLIED
+    // position, not the default. Reset cleared localStorage but the
+    // proxies stayed put. Now BC_LAYOUT_EDITOR_REFRESH fires after
+    // the localStorage clear; background re-runs each bbox provider
+    // (which now reads userOff={0,0}) and broadcasts the defaults
+    // back via BC_LAYOUT_EDITOR_BBOXES — see listener at top level.
+    try {
+      OBR.broadcast.sendMessage(
+        BC_LAYOUT_EDITOR_REFRESH,
+        {},
+        { destination: "LOCAL" },
+      );
+    } catch {}
+    hintEl.textContent = "已重置 · 拖动整体移动，拖右下角调整大小";
+  });
+
+  btnDone.addEventListener("click", () => closeEditor());
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeEditor();
+    }
+  });
+  blocker.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    closeEditor();
+  });
+});
+
+function closeEditor(): void {
+  try {
+    OBR.modal.close("com.obr-suite/layout-editor");
+  } catch {}
+}

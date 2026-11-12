@@ -1,0 +1,99 @@
+name: Verify scoped stable paired release
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/inline-choices264-stable
+      - codex/card-ux260-stable
+      - codex/card-ux259-stable
+      - codex/palette-258-stable
+      - codex/unified-ui-stable-20261008
+      - codex/card-links-stable-20261008
+      - codex/card-suite-followup-stable-20261007
+      - codex/final-stable-paired-20261003
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DND_CARD_WEB_ROOT: ${{ github.workspace }}/.paired-web
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: FullPeople/DND-card-web
+          ref: 7b99b0efa9a8b06b51f6f71f7da944a23c2d6133
+          path: .paired-web
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm ci
+        working-directory: .paired-web
+      - name: Verify exact paired Web progress inputs
+        working-directory: .paired-web
+        run: |
+          npm run verify:automation-source
+          npm run verify:automation-runtime
+          npm run verify:automation-progress
+      - name: Install paired browser dependency
+        working-directory: .paired-web
+        run: npx playwright install --with-deps chromium
+      - name: Grid-box anchoring and cross-scene picker regression
+        run: |
+          npm run test:bubbles
+          node tools/character-directory259-selftest.mjs
+          node tools/card-sync260-selftest.mjs
+      - name: Readable camera bindings and revocation
+        run: node --experimental-strip-types tools/locate260-selftest.mjs
+      - name: Historical controller and current LOCAL connection guards
+        run: |
+          node tools/three-dragon-stable-recovery-selftest.mjs
+          node tools/three-dragon-local-connection-selftest.mjs
+      - name: Preserved stable announcement, inventory and dependency guards
+        run: |
+          node tools/announcement-inline-selftest.mjs
+          node tools/inventory-model-selftest.mjs
+          node tools/bestiary-dependency-selftest.mjs
+      - name: Stable typecheck, host and exact paired five-page viewer
+        run: npm run build
+      - name: Settings palette and browser persistence
+        run: |
+          WORKBENCH_PANEL_OUT="$PWD/.local-evidence/palette257/panels" WORKBENCH_PANEL_ONLY=settings node tools/build-workbench-panels.mjs
+          WORKBENCH_SETTINGS_TEST_OUT=.local-evidence/palette257 node tools/workbench-palette257-selftest.mjs
+      - name: Retired fog entry and unchanged engine lifecycle
+        run: node tools/fog-menu-retirement-selftest.mjs
+      - name: Require the historical recovery page and viewer
+        run: |
+          test -f dist/three-dragon-ante.html
+          test -f dist/card-viewer/bridge.js
+          test -f dist/announcement.md
+      - name: Build exact standalone comparison
+        working-directory: .paired-web
+        run: npm run build:standalone
+      - name: Actual stable fullscreen viewer export and caption regression
+        working-directory: .paired-web
+        env:
+          LEGACY_SUITE_ROOT: ${{ github.workspace }}
+        run: npx playwright test --config playwright.legacy-viewer.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stable-viewer260-evidence
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .paired-web/.local-evidence/legacy-viewer/
+            .local-evidence/palette257/results.json
+            .local-evidence/palette257/settings-palette.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-stable-viewer260-build
+          if-no-files-found: error
+          path: dist/

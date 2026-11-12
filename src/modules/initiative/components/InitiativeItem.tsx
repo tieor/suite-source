@@ -1,0 +1,276 @@
+import { useState, useRef, useEffect } from "preact/compat";
+import { RollType } from "../hooks/useInitiative";
+import { type Lang, t } from "../utils/i18n";
+// (D20 icons removed — roll buttons are now plain colored brackets.)
+
+interface Props {
+  lang: Lang;
+  id: string;
+  name: string;
+  count: number;
+  modifier: number;
+  active: boolean;
+  rolled: boolean;
+  imageUrl: string;
+  inCombat: boolean;
+  preparing: boolean;
+  isGM: boolean;
+  canEdit: boolean;
+  canShowDice: boolean;
+  diceRolling: boolean;
+  /** "raw" → show count alone (default; the d20 result). "final" →
+   *  show count+modifier with a small sub-line "(count+mod)" so
+   *  whoever runs the panel sees the resolved initiative value at a
+   *  glance and can still verify the math. Toggled in the panel
+   *  header; per-client localStorage. */
+  displayMode: "raw" | "final";
+  /** Display-only HP ratio in [0, 1]; null when no HP info available
+   *  (no bubbles binding) or when the viewer's role/lock combo says
+   *  not to show it. The bar is drawn ABOVE the count footer as a
+   *  numberless progress strip so the user sees combat health at a
+   *  glance without revealing exact HP for locked tokens. */
+  hpRatio: number | null;
+  /** Owner's player color (DM uses their own DM color). Empty string
+   *  = no tint; rendered as a CSS variable so the slot can use it
+   *  for borders, backgrounds, and accent halos. */
+  ownerColor?: string;
+  /** Token's stealth flag — true when the DM has marked this token
+   *  invisible via the right-click menu. Drives the `is-invisible`
+   *  CSS class on the slot, which fades it semi-transparent so the
+   *  DM sees at a glance which entries are hidden from players.
+   *  (Player clients never receive invisible items in their list to
+   *  begin with — the panel filter strips them — so this prop only
+   *  ever affects the DM view.) */
+  invisible?: boolean;
+  onFocus: (id: string) => void;
+  onHover?: (id: string | null) => void;
+  onUpdateCount: (id: string, count: number) => void | Promise<void>;
+  onUpdateModifier: (id: string, mod: number) => void | Promise<void>;
+  onRoll: (id: string, type: RollType) => void;
+  onEndTurn?: () => void;
+  endTurnLabel?: string;
+}
+
+// Portrait card for the horizontal top-center strip. Image fills the top
+// ~80% (top-aligned, cropped), count + modifier tile at the bottom.
+// Active item bulges downward (taller). Roll buttons float below the card
+// when applicable.
+export function InitiativeItemRow({
+  id, name, count, modifier, active, rolled, imageUrl,
+  inCombat, preparing, isGM, canEdit, canShowDice, diceRolling,
+  displayMode, hpRatio, ownerColor, invisible,
+  onFocus, onHover, onUpdateCount, onUpdateModifier, onRoll,
+  onEndTurn, endTurnLabel, lang,
+}: Props) {
+  const [editingCount, setEditingCount] = useState(false);
+  const [editingMod, setEditingMod] = useState(false);
+  const [countVal, setCountVal] = useState(String(count));
+  const [modVal, setModVal] = useState(String(modifier));
+  const countRef = useRef<HTMLInputElement>(null);
+  const modRef = useRef<HTMLInputElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const countSession = useRef(false), modSession = useRef(false);
+  if (!canEdit) { countSession.current = false; modSession.current = false; }
+  useEffect(() => { if (!canEdit) { setEditingCount(false); setEditingMod(false); } }, [canEdit]);
+
+  // Scroll active item into view horizontally when it becomes active
+  useEffect(() => {
+    if (active && inCombat && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    }
+  }, [active, inCombat]);
+
+  const commitCount = () => {
+    if (!countSession.current) return;
+    countSession.current = false;
+    setEditingCount(false);
+    const p = parseFloat(countVal);
+    if (canEdit && !isNaN(p) && p !== count) void Promise.resolve(onUpdateCount(id, p)).catch(error => console.warn("[initiative] count save failed; reopen the value to retry", error));
+  };
+
+  const commitMod = () => {
+    if (!modSession.current) return;
+    modSession.current = false;
+    setEditingMod(false);
+    const p = parseInt(modVal);
+    if (canEdit && !isNaN(p) && p !== modifier) void Promise.resolve(onUpdateModifier(id, p)).catch(error => console.warn("[initiative] modifier save failed; reopen the value to retry", error));
+  };
+
+  const isActive = active && inCombat;
+  const modStr = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+
+  // Preparing: GM and owner-players can roll any number of times — visible
+  // regardless of Dice+ availability (we fall back to a local roll if Dice+
+  // isn't installed). Combat: GM only, since player rolls during combat
+  // would race with active-turn writes.
+  // `canShowDice` only suppresses GM-side combat rolls when there's no way
+  // to roll on this client (currently always true for GM, but kept for
+  // future-proofing).
+  const showRollButtons =
+    (preparing && canEdit) || (inCombat && isGM && canShowDice);
+
+  const disableRoll = !isGM && preparing && diceRolling;
+
+  // Show "End Turn" button to the active non-GM owner so they can advance
+  // their own turn without waiting on the GM.
+  const showEndTurn =
+    !!onEndTurn && isActive && !isGM && canEdit;
+
+  // 2026-05-10: tint slot with owner's color via CSS custom property.
+  // Empty string → falls back to the default slot styling (gold).
+  const slotStyle = ownerColor
+    ? ({ "--owner-color": ownerColor } as Record<string, string>)
+    : undefined;
+  return (
+    <div
+      ref={rowRef}
+      className={`initiative-item ${isActive ? "active" : ""} ${preparing ? "preparing" : ""}${ownerColor ? " has-owner-color" : ""}${invisible ? " is-invisible" : ""}`}
+      style={slotStyle}
+      onClick={() => onFocus(id)}
+      onMouseEnter={() => onHover?.(id)}
+      onMouseLeave={() => onHover?.(null)}
+    >
+      <div className="item-img">
+        {imageUrl ? (
+          <img src={imageUrl} alt="" draggable={false} />
+        ) : (
+          <div className="item-img-placeholder">{name.charAt(0).toUpperCase()}</div>
+        )}
+      </div>
+
+      {/* Modifier overlay — top-left corner of the image area, click to edit */}
+      <div
+        className="item-mod"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!canEdit) return;
+          modSession.current = true;
+          setModVal(String(modifier));
+          setEditingMod(true);
+          setTimeout(() => modRef.current?.select(), 0);
+        }}
+      >
+        {editingMod && canEdit ? (
+          <input
+            ref={modRef}
+            type="number"
+            className="mod-input"
+            value={modVal}
+            onInput={(e) => setModVal((e.target as HTMLInputElement).value)}
+            onBlur={commitMod}
+            onKeyDown={(e) => { if (e.key === "Enter") commitMod(); if (e.key === "Escape") { modSession.current = false; setEditingMod(false); } }}
+          />
+        ) : (
+          <span>{modStr}</span>
+        )}
+      </div>
+
+      {/* HP progress bar — numberless strip that sits just above the
+          count footer. Width tracks current/max HP; ratio is computed
+          upstream so locked tokens (player view) get phase-quantised
+          values matching the bubbles module's silhouette mode. Hidden
+          entirely when hpRatio is null (no bubbles data, or viewer
+          shouldn't see this token's HP at all). */}
+      {hpRatio != null && (
+        <div className="item-hp-track" aria-hidden="true">
+          <div
+            className="item-hp-fill"
+            style={{ width: `${Math.max(0, Math.min(1, hpRatio)) * 100}%` }}
+          />
+        </div>
+      )}
+
+      {/* Count footer — always visible, editable by owner/GM.
+          In `final` mode, the visible "count" is count+modifier and a
+          small `(count±mod)` formula is shown right under it. The
+          editable raw value (the d20 result / manual count) is still
+          `count` itself — clicking the cell still puts you into the
+          count input, NOT count+mod, so the math stays unambiguous.
+          The mode is honoured regardless of `rolled` so the toggle
+          is visible immediately even when nobody has rolled yet. */}
+      <div
+        className={`item-count ${canEdit ? "" : "locked"} ${displayMode === "final" ? "show-final" : ""}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!canEdit) return;
+          countSession.current = true;
+          // Round here too — the manual-edit input shouldn't surface a
+          // reorder-produced fraction. Typing a whole number overrides
+          // the precise value, which is the expected manual-edit
+          // behaviour.
+          setCountVal(String(Math.round(count)));
+          setEditingCount(true);
+          setTimeout(() => countRef.current?.select(), 0);
+        }}
+      >
+        {editingCount && canEdit ? (
+          <input
+            ref={countRef}
+            type="number"
+            className="count-input"
+            value={countVal}
+            onInput={(e) => setCountVal((e.target as HTMLInputElement).value)}
+            onBlur={commitCount}
+            onKeyDown={(e) => { if (e.key === "Enter") commitCount(); if (e.key === "Escape") { countSession.current = false; setEditingCount(false); } }}
+          />
+        ) : displayMode === "final" ? (
+          <>
+            {/* 2026-05-14 (#5 fix) — `count` may carry a fraction
+                (reorder mode uses fractional totals to slot a card
+                between two distinct-total neighbours). The sort uses
+                the precise value; the display rounds so the user
+                never sees "14.5". */}
+            <span className="count-display">{Math.round(count + modifier)}</span>
+            <span className="count-formula">({Math.round(count)}{modifier >= 0 ? "+" : ""}{modifier})</span>
+          </>
+        ) : (
+          <span className="count-display">{Math.round(count)}</span>
+        )}
+      </div>
+
+      {/* Roll buttons — three colored bracket-blocks beneath the slot.
+          No text, no icons; color communicates intent (red=disadv,
+          slate=normal, green=adv). dis hugs the LEFT edge with a
+          bottom-left curve, adv hugs the RIGHT edge with a bottom-
+          right curve, normal fills the middle with straight corners
+          so the trio reads as a single shelf. */}
+      {showRollButtons && (
+        <div className="roll-buttons" onClick={(e) => e.stopPropagation()}>
+          <button
+            className="roll-btn roll-dis"
+            onClick={() => onRoll(id, "disadvantage")}
+            disabled={disableRoll}
+            title={t(lang, "rollDisadvantageTitle")}
+            aria-label={t(lang, "rollDisadvantage")}
+          />
+          <button
+            className="roll-btn roll-normal"
+            onClick={() => onRoll(id, "normal")}
+            disabled={disableRoll}
+            title={t(lang, "rollNormalTitle")}
+            aria-label={t(lang, "rollNormal")}
+          />
+          <button
+            className="roll-btn roll-adv"
+            onClick={() => onRoll(id, "advantage")}
+            disabled={disableRoll}
+            title={t(lang, "rollAdvantageTitle")}
+            aria-label={t(lang, "rollAdvantage")}
+          />
+        </div>
+      )}
+
+      {/* End-turn button — active non-GM owner only. Takes the same slot as
+          roll buttons (during combat, rolls aren't shown to non-GMs). */}
+      {showEndTurn && !showRollButtons && (
+        <button
+          className="end-turn-btn"
+          onClick={(e) => { e.stopPropagation(); onEndTurn?.(); }}
+          title={t(lang, "endTurnTitle")}
+        >
+          {endTurnLabel ?? t(lang, "endTurn")}
+        </button>
+      )}
+    </div>
+  );
+}

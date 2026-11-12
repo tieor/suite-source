@@ -1,0 +1,21 @@
+node_modules
+__pycache__/
+dist
+*.local
+tools/buff-fx-gen/__pycache__/
+tools/buff-fx-gen/.emoji-cache/
+
+# Local fog rollback backup (kept out-of-tree, not for git)
+_fog-backup-*/
+
+dist-workbench-dev/
+workbench-test-output/
+dist-feedback/
+
+dist-feedback198/
+
+dist-feedback199/
+dist-feedback200/
+dist-feedback201/
+
+.local-evidence/
