@@ -237,25 +237,11 @@ export function InitiativeItemRow({
       {showRollButtons && (
         <div className="roll-buttons" onClick={(e) => e.stopPropagation()}>
           <button
-            className="roll-btn roll-dis"
-            onClick={() => onRoll(id, "disadvantage")}
-            disabled={disableRoll}
-            title={t(lang, "rollDisadvantageTitle")}
-            aria-label={t(lang, "rollDisadvantage")}
-          />
-          <button
             className="roll-btn roll-normal"
             onClick={() => onRoll(id, "normal")}
             disabled={disableRoll}
             title={t(lang, "rollNormalTitle")}
             aria-label={t(lang, "rollNormal")}
-          />
-          <button
-            className="roll-btn roll-adv"
-            onClick={() => onRoll(id, "advantage")}
-            disabled={disableRoll}
-            title={t(lang, "rollAdvantageTitle")}
-            aria-label={t(lang, "rollAdvantage")}
           />
         </div>
       )}
