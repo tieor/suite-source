@@ -40,6 +40,8 @@ export interface StatBannerOptions {
   /** Fallback values (e.g. cc-info's card-data HP/AC) shown when the
    *  token has no bubbles metadata for a field yet. */
   fallback?: Partial<Record<keyof BubblesData, number>>;
+  /** 额外防御值（如接触 AC / 措手不及），有值时在 AC 旁显示按钮。 */
+  secondary?: Array<{ label: string; value: number }>;
   /** Already-fetched bubbles data, for a flicker-free initial paint. */
   initialLive?: BubblesData;
 }
@@ -74,6 +76,7 @@ function statBannerHtml(
   live: BubblesData,
   isGM: boolean,
   fb: Partial<Record<keyof BubblesData, number>>,
+  secondary?: Array<{ label: string; value: number }>,
 ): string {
   const liveHp = typeof live.health === "number" ? live.health : (fb.health ?? 0);
   const liveMaxHp = typeof live["max health"] === "number" ? live["max health"] : (fb["max health"] ?? 0);
@@ -99,7 +102,6 @@ function statBannerHtml(
                  title="总生命值">
         </span>
       </div>
-      <span class="stat-help" role="button" tabindex="0" title="输入+x或-x可自动计算">?</span>
       <div class="temp-pill stat-cell">
         <span class="prev-hint" data-prev></span>
         <input class="stat-input" type="text" inputmode="numeric"
@@ -112,6 +114,7 @@ function statBannerHtml(
                data-field="armor class" value="${escapeHtml(String(liveAc))}"
                title="AC">
       </div>
+      ${secondary && secondary.length ? `<button class="stat-more" type="button" title="接触 AC / 措手不及">▤</button>` : ""}
       ${isGM ? lockButtonHtml(live.locked !== false) : ""}
     </div>
   `;
@@ -229,7 +232,7 @@ export function mountStatBanner(opts: StatBannerOptions): {
   refresh: () => Promise<void>;
   unmount: () => void;
 } {
-  const { container, getItemId, isGM, fallback = {}, initialLive } = opts;
+  const { container, getItemId, isGM, fallback = {}, initialLive, secondary } = opts;
   ensureStatBannerStyles();
   let readRevision = 0, viewRevision = 0, writeRevision = 0;
   let displayedId = getItemId();
@@ -277,18 +280,25 @@ export function mountStatBanner(opts: StatBannerOptions): {
     else refreshInputs(live);
   }
   function bind() {
-    container.querySelector<HTMLElement>(".stat-help")?.addEventListener("click", (event) => {
+    container.querySelector<HTMLElement>(".stat-more")?.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const banner = container.querySelector<HTMLElement>(".stat-banner");
       if (!banner) return;
-      const existing = banner.querySelector<HTMLElement>(".stat-help-tip");
+      const existing = banner.querySelector<HTMLElement>(".stat-more-tip");
       if (existing) { existing.remove(); return; }
       const tip = document.createElement("div");
-      tip.className = "stat-help-tip";
-      tip.textContent = "输入 +x 或 -x 可自动计算";
+      tip.className = "stat-more-tip";
+      for (const row of secondary || []) {
+        const line = document.createElement("span");
+        line.textContent = row.label;
+        const value = document.createElement("b");
+        value.textContent = String(row.value);
+        line.appendChild(value);
+        tip.appendChild(line);
+      }
       banner.appendChild(tip);
-      setTimeout(() => tip.remove(), 3000);
+      setTimeout(() => tip.remove(), 4000);
     });
     container.querySelector<HTMLButtonElement>(".stat-lock")?.addEventListener("click", () => {
       const target = guard.capture(true);
@@ -324,7 +334,7 @@ export function mountStatBanner(opts: StatBannerOptions): {
     });
   }
   function render(next: BubblesData) {
-    container.innerHTML = statBannerHtml(next, isGM, fallback);
+    container.innerHTML = statBannerHtml(next, isGM, fallback, secondary);
     live = next; bind(); localize();
   }
   render(live);
