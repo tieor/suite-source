@@ -80,7 +80,7 @@ import {
 
 const POPOVER_ID = "com.obr-suite/settings";
 const KOFI_URL = "https://ko-fi.com/fullpeople";
-const EMAIL = "1763086701@qq.com";
+const EMAIL = "1538519473@qq.com";
 const GITHUB_URL = "https://github.com/FullPeople";
 const BUBBLES_SETTINGS_KEY = "com.obr-suite/bubbles/settings";
 const DEFAULT_BUBBLES_PLAYER_THRESHOLD = 25;
@@ -330,7 +330,7 @@ const INITIATIVE_DESC: BilingualHtml = {
   zh: `<p>顶部居中的横向先攻条，覆盖完整 D&amp;D 战斗流程。</p>
 <ul>
   <li><b>加入</b>：右键角色 → <em>加入先攻</em>（支持框选多个）</li>
-  <li><b>投骰</b>：每张卡下方<b>三色括号</b>= 劣势 / 普通 / 优势；玩家有 Dice+ 则联动，否则本地骰；DM 始终本地</li>
+  
   <li><b>切换回合</b>：所有人摄像头自动聚焦到当前角色</li>
   <li><b>集结</b>：右键空白处 → <em>集结先攻角色</em>（螺旋排列）</li>
   <li><b>owner 玩家</b>可投自己的先攻、改加值、点结束按钮自动进入下一回合</li>
@@ -339,7 +339,7 @@ const INITIATIVE_DESC: BilingualHtml = {
   en: `<p>Top-center horizontal initiative strip — full D&amp;D combat flow.</p>
 <ul>
   <li><b>Add</b>: right-click a token → <em>Add to initiative</em> (box-select supported)</li>
-  <li><b>Roll</b>: three colored brackets under each slot = Disadv / Normal / Adv. Players use Dice+ if available, fallback to local; DM always local</li>
+  
   <li><b>Turn change</b>: every camera auto-focuses on the active token</li>
   <li><b>Gather</b>: right-click empty space → <em>Gather initiative tokens</em> (spiral layout)</li>
   <li><b>Owner-players</b> can roll their own initiative, edit modifier, and end their own turn</li>
@@ -519,7 +519,7 @@ const TRANSFORM_DESC: BilingualHtml = {
 </ul>`,
 };
 const TRICKSTER_DESC: BilingualHtml = {
-  zh: `<p>左侧 tool 栏的「<b>捣蛋鬼在哪？</b>」用于在场景里画出隐藏的触发圆——指定的 token 一旦走进圆里，就会自动开启<b>时停</b>并把镜头聚焦到它身上，做<b>伏击触发器</b> / 暗门 / 陷阱很方便。</p>
+  zh: `<p>左侧 tool 栏的「<b>陷阱</b>」用于在场景里画出隐藏的触发圆——指定的 token 一旦走进圆里，就会自动开启<b>时停</b>并把镜头聚焦到它身上，做<b>伏击触发器</b> / 暗门 / 陷阱很方便。</p>
 <ul>
   <li><b>新建</b>：选中工具，地图上<b>拖拽画圆</b> → 松手即建。圆心放紫色 SVG 标记，半径为触发范围</li>
   <li>松手会弹出编辑面板：取名 / 选触发对象（所有 / 仅玩家 / 仅 NPC）/ 一次性 / 玩家可见 / 锁定。<b>取消</b>等于不创建，<b>保存</b>则提交</li>
@@ -1977,12 +1977,6 @@ const TABS: TabDef[] = [
     body: SUPPORT,
   },
   {
-    id: "important",
-    zh: `${ICONS.pin} 重要说明`,
-    en: `${ICONS.pin} Important Notes`,
-    body: IMPORTANT_NOTES,
-  },
-  {
     id: "version",
     zh: `${ICONS.library} 基础设置`,
     en: `${ICONS.library} Basics`,
@@ -2201,102 +2195,8 @@ const TABS: TabDef[] = [
         });
     },
   },
-  {
-    id: "libraries",
-    zh: `${ICONS.library} 库设置`,
-    en: `${ICONS.library} Libraries`,
-    dynamicBody: (lang) => renderLibrariesBody(lang),
-    afterRender: (root) => wireLibrariesBody(root),
-  },
   { id: "timeStop", zh: `${ICONS.clockPause} 时停模式`, en: `${ICONS.clockPause} Time Stop`, moduleId: "timeStop", body: TIMESTOP_DESC },
   { id: "focus", zh: `${ICONS.crosshair} 同步视口`, en: `${ICONS.crosshair} Sync Viewport`, moduleId: "focus", body: FOCUS_DESC },
-  {
-    id: "bestiary",
-    zh: `${ICONS.dragon} 怪物图鉴`,
-    en: `${ICONS.dragon} Bestiary`,
-    moduleId: "bestiary",
-    // Auto-add-to-initiative toggle MOVED into the bestiary popover
-    // (see modules/bestiary/panel-page.tsx — the green pill in the
-    // popover header). Settings page just shows the description now;
-    // the GM flips the option inline while spawning instead of
-    // hunting for it in a Settings tab.
-    dynamicBody: (lang) => {
-      const desc = lang === "zh" ? BESTIARY_DESC.zh : BESTIARY_DESC.en;
-      // DM-only maintenance: scenes older than the 1.1.10 kiwee image
-      // migration have tokens whose baked-in image URL still points at
-      // the retired obr.dnd.center proxy.
-      const maintenance = isGM
-        ? `
-        <h3 style="margin-top:14px">${lang === "zh" ? "维护" : "Maintenance"}</h3>
-        <div class="row">
-          <div class="lbl">
-            ${lang === "zh" ? "修复旧图片地址" : "Repair legacy image URLs"}
-            <div class="desc"><em>${lang === "zh"
-              ? `图片源已从失效的 <code>obr.dnd.center/5etools-img</code> 代理迁移到 <code>5e.kiwee.top</code>。迁移前生成的怪物 token（包括旧独立版图鉴生成的）仍引用旧地址，图片会加载失败。点击后把当前场景所有 token 图片和变身快照里的旧地址改写为 kiwee 镜像；自定义 / 外链图片不受影响。每个场景需要单独点一次。`
-              : `The image source moved from the retired <code>obr.dnd.center/5etools-img</code> proxy to <code>5e.kiwee.top</code>. Monster tokens spawned before the migration (including ones from the old standalone Bestiary) still reference the old proxy and fail to load. Clicking rewrites every legacy token image URL and transform-snapshot URL in the current scene to the kiwee mirror; custom / external images are untouched. Run this once per scene.`}</em></div>
-          </div>
-          <button data-key="bestiaryRepairLegacyImages" class="reset-panels-btn" type="button" ${
-            bestiaryImageRepairInFlight ? "disabled" : ""
-          }>${
-            bestiaryImageRepairInFlight
-              ? (lang === "zh" ? "修复中…" : "Repairing…")
-              : (lang === "zh" ? "修复当前场景" : "Repair current scene")
-          }</button>
-        </div>`
-        : "";
-      return `${desc}${maintenance}`;
-    },
-    afterRender: (root) => {
-      // DM-only one-shot repair: rewrites legacy obr.dnd.center image
-      // URLs (token images + transform snapshots) to the kiwee mirror.
-      const repairBtn = root.querySelector<HTMLButtonElement>('button[data-key="bestiaryRepairLegacyImages"]');
-      if (repairBtn && isGM) {
-        repairBtn.addEventListener("click", async () => {
-          if (repairBtn.disabled || bestiaryImageRepairInFlight) return;
-          const lang = getLocalLang();
-          // Cheap gate first — don't make the DM read and confirm a
-          // two-paragraph dialog only to learn no scene is open.
-          const ready = await OBR.scene.isReady().catch(() => false);
-          if (!ready) {
-            const noScene = lang === "zh" ? "请先打开一个场景再修复。" : "Open a scene first, then repair.";
-            try { await OBR.notification.show(noScene, "WARNING"); } catch { window.alert(noScene); }
-            return;
-          }
-          const confirmMsg = lang === "zh"
-            ? "确认修复当前场景的旧图片地址？\n\n只会改写 obr.dnd.center/5etools-img 前缀的地址（token 图片 + 变身快照），改写为 5e.kiwee.top 镜像。自定义图片不受影响。"
-            : "Repair legacy image URLs in the current scene?\n\nOnly URLs with the obr.dnd.center/5etools-img prefix are rewritten (token images + transform snapshots) to the 5e.kiwee.top mirror. Custom images are untouched.";
-          if (!window.confirm(confirmMsg)) return;
-          const origText = repairBtn.textContent ?? "";
-          bestiaryImageRepairInFlight = true;
-          repairBtn.disabled = true;
-          repairBtn.textContent = lang === "zh" ? "修复中…" : "Repairing…";
-          try {
-            const { imagesTouched, snapshotsTouched, total } = await repairLegacyBestiaryImages();
-            const ok = lang === "zh"
-              ? (imagesTouched + snapshotsTouched === 0
-                  ? `没有发现旧图片地址（共扫描 ${total} 个物件）。`
-                  : `已修复 ${imagesTouched} 个 token 图片、${snapshotsTouched} 个变身快照（共扫描 ${total} 个物件）。`)
-              : (imagesTouched + snapshotsTouched === 0
-                  ? `No legacy image URLs found (scanned ${total} items).`
-                  : `Repaired ${imagesTouched} token image${imagesTouched === 1 ? "" : "s"} and ${snapshotsTouched} transform snapshot${snapshotsTouched === 1 ? "" : "s"} (scanned ${total} items).`);
-            try { await OBR.notification.show(ok, "SUCCESS"); } catch { window.alert(ok); }
-          } catch (e) {
-            console.error("[obr-suite/settings] bestiary image repair failed", e);
-            const fail = lang === "zh" ? "修复失败，请查看 DevTools 控制台。" : "Repair failed — see DevTools console.";
-            try { await OBR.notification.show(fail, "ERROR"); } catch { window.alert(fail); }
-          } finally {
-            bestiaryImageRepairInFlight = false;
-            // The tab may have re-rendered mid-repair, leaving this
-            // closure's node detached — restore it (harmless if so)
-            // and re-render the live view to pick up the idle state.
-            repairBtn.disabled = false;
-            repairBtn.textContent = origText;
-            if (activeTab === "bestiary") renderContent();
-          }
-        });
-      }
-    },
-  },
   {
     id: "characterCards",
     zh: `${ICONS.idCard} 角色卡`,
@@ -2304,7 +2204,7 @@ const TABS: TabDef[] = [
     moduleId: "characterCards",
     dynamicBody: (lang) => {
       const desc = lang === "zh" ? CHARCARD_DESC.zh : CHARCARD_DESC.en;
-      const btns = `<div class="dl-row"><a class="dl-btn" href="https://dnd.center/card/" target="_blank" rel="noopener">${lang === "zh" ? "进入车卡网站" : "Open character website"}</a></div>`;
+      const btns = `<div class="dl-row"><a class="dl-btn" href="${assetUrl("pf1e-card.html")}" download="PF1E角色卡.html">${lang === "zh" ? "下载角色卡" : "Download character card"}</a></div>`;
       return `${desc}${btns}`;
     },
   },
@@ -2571,8 +2471,8 @@ const TABS: TabDef[] = [
   },
   {
     id: "trickster",
-    zh: `${ICONS.trickster} 捣蛋鬼在哪？`,
-    en: `${ICONS.trickster} Trickster Marker`,
+    zh: `${ICONS.trickster} 陷阱`,
+    en: `${ICONS.trickster} Trap`,
     moduleId: "trickster",
     body: TRICKSTER_DESC,
   },
