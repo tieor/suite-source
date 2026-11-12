@@ -4,6 +4,7 @@ import OBR from "@owlbear-rodeo/sdk";
 import { installDebugOverlay } from "../../utils/debugOverlay";
 import { ICONS } from "../../icons";
 import { resolveClickRollTarget } from "../dice/tags";
+import { patchBubbles } from "../../utils/statEdit";
 import { RESOURCES_KEY } from "../resourceTracker/types";
 import { bindRollableContextMenu, bindRollableClickPopup } from "../dice/context-menu";
 import { subscribeToSfx } from "../dice/sfx-broadcast";
@@ -535,6 +536,35 @@ async function syncPf1eResources(itemId: string | null, pools: any[]): Promise<v
     });
   } catch (err) {
     console.warn('[cc-info] pf1e resource sync failed', err);
+  }
+}
+
+/** PF1E 角色卡 → 绑定 token 的气泡元数据（HP/AC），让画布血条与悬浮窗保持一致。 */
+const pf1eStatSignatures = new Map<string, string>();
+async function syncPf1eStatsToTokens(cardId: string, d: any): Promise<void> {
+  const cs = d?.core_stats || {};
+  const hp = cs.hp || {};
+  const health = Number(hp.current);
+  const maxHealth = Number(hp.max);
+  if (!Number.isFinite(health) || !Number.isFinite(maxHealth)) return;
+  const patch: any = {
+    health,
+    "max health": maxHealth,
+    "temporary health": Number(hp.temp) || 0,
+  };
+  if (Number.isFinite(Number(cs.ac))) patch["armor class"] = Number(cs.ac);
+  const sig = JSON.stringify(patch);
+  try {
+    const items = await OBR.scene.items.getItems(
+      (it: any) => it?.metadata?.["com.character-cards/boundCardId"] === cardId,
+    );
+    for (const it of items) {
+      if (pf1eStatSignatures.get(it.id) === sig) continue;
+      pf1eStatSignatures.set(it.id, sig);
+      await patchBubbles(it.id, patch);
+    }
+  } catch (err) {
+    console.warn("[cc-info] pf1e stat sync failed", err);
   }
 }
 
