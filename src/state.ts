@@ -193,7 +193,7 @@ export const DEFAULT_STATE: SuiteState = {
     inventory: true,
     timeStop: true,
     focus: true,
-    bestiary: true,
+    bestiary: false,
     characterCards: true,
     initiative: true,
     search: true,
