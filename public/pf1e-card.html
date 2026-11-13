@@ -2820,8 +2820,7 @@ function collectCharacterData(){
       armor: {
         name: document.getElementById('b-armor-name').value,
         type: document.getElementById('b-armor-type').value,
-        price: n('b-armor-price'), ac: n('b-armor-ac'),
-      maxDex: ((document.getElementById('b-armor-maxdex')?.value || '').trim() === '' ? null : n('b-armor-maxdex')),
+        price: n('b-armor-price'), ac: n('b-armor-ac'), maxDex: n('b-armor-maxdex'),
         acp: n('b-armor-acp'), asf: n('b-armor-asf'), weight: n('b-armor-weight'),
         note: document.getElementById('b-armor-note').value
       },
@@ -3100,10 +3099,7 @@ function loadCharacterData(data){
     document.getElementById('b-armor-type').value = a.type || '重甲';
     ['price','ac','maxdex','acp','asf','weight'].forEach(k=>{
       const el = document.getElementById('b-armor-'+k);
-      if(!el) return;
-      const val = (k === 'maxdex') ? a.maxDex : a[k];
-      if(k === 'maxdex' && (val === null || val === undefined || val === '')) el.value = '';
-      else el.value = val || 0;
+      if(el) el.value = a[k] || 0;
     });
     document.getElementById('b-armor-note').value = a.note || '';
     document.getElementById('b-shield-name').value = s.name || '';
