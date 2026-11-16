@@ -31,6 +31,10 @@
   /* 展示模式：填充/文字颜色互换，切换时一眼可辨 */
   .view-fab.is-display{background:#fff;color:var(--accent);border-color:var(--accent)}
   .view-fab.is-display:hover{background:#fdf6ec;color:var(--accent2);border-color:var(--accent2)}
+  /* 负重提示横幅 */
+  .load-banner{display:none;text-align:center;font-weight:800;line-height:1.3;margin:0 0 10px}
+  .load-banner.overload{display:block;color:#c0392b;font-size:30px}
+  .load-banner.heavyload{display:block;color:#d4a017;font-size:20px}
   .view{display:none}
   .view.active{display:block}
 
@@ -79,8 +83,15 @@
   .calc-auto{min-width:30px;text-align:center;color:var(--accent);font-weight:bold}
 
   /* 紧凑信息行 */
-  .info-row{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:13px}
-  .info-row label{display:inline;margin-bottom:0;margin-right:4px}
+  .info-row{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:13px;min-height:30px}
+  .info-row > label{line-height:30px;margin-top:0;margin-bottom:0;vertical-align:middle}
+  .info-row > label.al-col{text-align:right;padding-right:4px;margin-right:-8px}
+  .info-row > input{height:28px;box-sizing:border-box;vertical-align:middle;flex:none}
+  .info-row > span{flex:none}
+  .info-row label{display:inline;margin-bottom:0;margin-right:4px;color:var(--text);font-weight:600;white-space:nowrap;flex:none}
+  .info-row{flex-wrap:nowrap}
+  .info-col{overflow-x:auto}
+  .info-row label + input, .info-row label + span{margin-right:6px}\n  .info-row > input{flex:none}
   .info-row input,.info-row select{display:inline;width:auto}
   /* 建卡页：身份各行左侧标签定宽，保证输入框左缘与角色名对齐 */
   #builder .info-row > label:first-child{width:56px;display:inline-block;flex:none;margin-right:2px}
@@ -168,10 +179,11 @@
   /* ===== 查看器模式：基础信息一行、紧凑、隐藏无关区块 ===== */
   body.pf1e-viewer #d-portrait-box{display:none}
   body.pf1e-viewer #sec-basic-display .col-2{max-width:none;width:100%}
-  body.pf1e-viewer .info-col{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;margin-bottom:10px}
+  body.pf1e-viewer .info-col{display:flex;flex-direction:column;flex-wrap:nowrap;gap:4px;margin-bottom:10px}
   body.pf1e-viewer .info-col .info-row{display:inline-flex;align-items:baseline;gap:6px;margin:0}
-  body.pf1e-viewer .info-col .info-row label{font-size:12px;color:var(--text2);margin:0}
-  body.pf1e-viewer .info-col .info-row .d-text{font-size:21px;font-weight:800;color:var(--text)}
+  body.pf1e-viewer .info-col .info-row label{font-size:12px;color:var(--text);font-weight:600;margin:0;white-space:nowrap;flex:none}
+  body.pf1e-viewer .info-col .info-row > label:first-child{min-width:56px}
+  body.pf1e-viewer .info-col .info-row .d-text{font-size:16px;font-weight:700;color:var(--text)}
   body.pf1e-viewer .ability-grid-2x3{grid-template-columns:repeat(6,1fr);gap:6px}
   body.pf1e-viewer .ability-box{padding:4px 4px;min-height:52px}
   body.pf1e-viewer .ability-box .ab-name{font-size:11px}
@@ -324,7 +336,7 @@
   .pool-item input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
   .pool-item .pool-name-ro{width:6em;flex:none;font-weight:600}
   .pool-item .pool-counter-ro{flex:none;color:var(--accent);font-weight:700}
-  .pool-item .pool-desc-ro{flex:1;min-width:0;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pool-item .pool-desc-ro{flex:1;min-width:0;color:var(--text2);white-space:normal;overflow:visible;text-overflow:clip}
   .pool-counter{display:flex;align-items:center;gap:4px;font-weight:bold}
   .pool-counter input{width:45px}
 
@@ -398,6 +410,16 @@
   .btn:hover{background:var(--accent)}
   .btn-add{background:var(--success)}
   .btn-add:hover{background:#3aa06a}
+  .btn-clear{background:#c0392b}
+  .btn-clear:hover{background:#e74c3c}
+  .pf-confirm-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:100000}
+  .pf-confirm{background:#fff;border-radius:10px;padding:20px 22px;min-width:320px;max-width:420px;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  .pf-confirm h3{margin:0 0 8px;font-size:16px;color:#333}
+  .pf-confirm p{margin:0 0 16px;font-size:13px;color:#666;line-height:1.6}
+  .pf-confirm-btns{display:flex;justify-content:flex-end;gap:10px}
+  .pf-confirm-btns button{font-size:13px;padding:6px 14px;border-radius:6px;cursor:pointer;border:1px solid #ccc;background:#fff;color:#333}
+  .pf-confirm-btns .danger{background:#e74c3c;border-color:#c0392b;color:#fff}
+  .pf-confirm-btns .danger:hover{background:#ff5a49}
   .btn-export{background:#2b6cb0}
   .btn-export:hover{background:#3a83cf}
   .btn-import{background:var(--accent2)}
@@ -410,7 +432,50 @@
     .row{flex-direction:column}
     .ability-grid-2x3{grid-template-columns:repeat(3,1fr)}
   }
-
+  /* ===== 笔记按钮与笔记窗 ===== */
+  .note-fab{
+    position:fixed;right:24px;bottom:108px;z-index:99999;
+    width:64px;height:64px;padding:0;border-radius:50%;
+    display:none;align-items:center;justify-content:center;
+    font-family:inherit;font-size:26px;font-weight:700;line-height:1;cursor:pointer;
+    border:2px solid #3498db;background:#fff;color:#2f80c9;
+    box-shadow:0 6px 18px rgba(0,0,0,0.25);
+    transition:transform .15s ease, background .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .note-fab:hover{background:#e8f3fd;transform:translateY(-2px)}
+  .note-fab:active{transform:scale(.94)}
+  .note-fab.on:hover{background:#2569a8}
+  .note-fab.on{border-color:#fff;background:#2f80c9;color:#fff}
+  .note-panel{
+    position:fixed;right:24px;bottom:190px;z-index:99998;
+    width:min(520px,calc(100vw - 48px));height:min(420px,calc(100vh - 180px));
+    display:flex;flex-direction:column;
+    background:#fff;border:1px solid #b9c6d6;border-radius:10px;
+    box-shadow:0 12px 36px rgba(0,0,0,0.3);overflow:hidden;
+  }
+  .note-toolbar{display:flex;align-items:center;gap:4px;padding:6px 8px;border-bottom:1px solid #dce4ee;background:#f4f7fb;flex-wrap:wrap}
+  .note-toolbar button{
+    min-width:28px;height:28px;border:1px solid #c7d3e2;background:#fff;border-radius:4px;
+    cursor:pointer;font-size:13px;color:#333;font-family:inherit;padding:0 6px;
+  }
+  .note-toolbar button:hover{background:#e8f1fb;border-color:#8fb8e2}
+  .note-toolbar input[type=color]{width:30px;height:28px;border:1px solid #c7d3e2;border-radius:4px;padding:1px;background:#fff;cursor:pointer}
+  .note-tabs{display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid #dce4ee;background:#f8fafc;flex-wrap:wrap}
+  .note-tab{min-width:28px;height:24px;padding:0 6px;border:1px solid #c7d3e2;background:#fff;border-radius:4px;cursor:pointer;font-size:12px;color:#333;font-family:inherit}
+  .note-tab.on{background:#2f80c9;color:#fff;border-color:#2f80c9}
+  .note-tab-wrap{display:inline-flex;align-items:center;gap:1px;margin-right:6px}
+  .note-tab-wrap .note-tab-del{border-top-left-radius:0;border-bottom-left-radius:0;min-width:20px;padding:0 3px;height:24px}
+  .note-tab-wrap .note-tab:first-child{border-top-right-radius:0;border-bottom-right-radius:0}
+  .note-tab.note-tab-del{color:#c0392b;min-width:22px;padding:0 4px}
+  .note-palette{display:inline-flex;gap:7px;align-items:center;margin-left:8px}
+  .note-palette button{width:20px;height:20px;min-width:20px;border-radius:4px;border:1px solid rgba(0,0,0,.25);padding:0;cursor:pointer}
+  .note-palette button:hover{outline:2px solid #2f80c9;outline-offset:1px}
+  .note-palette button.on{outline:2px solid #2f80c9;outline-offset:1px;transform:scale(1.12)}
+  .note-editor{flex:1;overflow-y:auto;padding:10px 12px;font-size:14px;line-height:1.6;color:#222;outline:none}
+  .note-editor:empty::before{content:attr(data-placeholder);color:#9aa7b6}
+  .p-feat-table th, .p-feat-table td{text-align:center}
+  .p-feat-table .p-feat-name, .p-feat-table .p-feat-desc{width:100%;box-sizing:border-box;text-align:center}
+  .p-skill-name{text-align:center !important}
   /* ===== PF1E 查看器模式（OBR 角色卡 iframe，只读） ===== */
   body.pf1e-viewer{padding:8px 10px 24px}
   body.pf1e-viewer .top-bar,
@@ -431,6 +496,7 @@
   <div class="top-bar">
     <div class="top-bar-left"></div>
     <div class="top-bar-right">
+      <button class="btn btn-clear btn-sm" onclick="clearCharacterConfirm()">🗑 清空角色</button>
       <button class="btn btn-add btn-sm" onclick="saveCharacterLocal()">💾 保存角色</button>
       <button class="btn btn-export btn-sm" onclick="exportCharacter()">📤 导出角色</button>
       <button class="btn btn-import btn-sm" onclick="importCharacter()">📂 读取角色</button>
@@ -471,16 +537,38 @@
                 </div>
                 <div class="info-row">
                   <label>种族</label>
-                  <input type="text" id="b-race" value="" placeholder="种族" onchange="render()" style="width:110px">
-                  <label style="margin-left:12px">阵营</label>
-                  <input type="text" id="b-align" value="" style="width:60px">
+                  <input type="text" id="b-race" value="" placeholder="种族" onchange="render()" style="width:150px">
+                </div>
+                <div class="info-row">
+                  <label>阵营</label>
+                  <input type="text" id="b-align" value="" style="width:100px">
+                  <label class="al-col" style="width:60px">信仰</label>
+                  <input type="text" id="b-faith" value="" style="width:90px">
+                  <label class="al-col" style="width:60px">年龄</label>
+                  <input type="text" id="b-age" value="" style="width:70px">
+                  <label class="al-col" style="width:60px">性别</label>
+                  <input type="text" id="b-gender" value="" style="width:70px">
+                  <label class="al-col" style="width:60px">肤色</label>
+                  <input type="text" id="b-skin" value="" style="width:90px">
                 </div>
                 <div class="info-row">
                   <label>速度</label>
-                  <input type="number" id="b-speed" value="" min="0" style="width:70px" onchange="render()" title="移动速度（尺）">
-                  <span style="margin-left:6px;color:var(--text2)">尺</span>
-                  <label style="margin-left:12px">奔跑速度</label>
-                  <span class="calc-auto" id="b-run-speed">—</span>
+                  <span style="width:100px;display:inline-flex;align-items:center;gap:4px;flex:none">
+                    <input type="number" id="b-speed" value="" min="0" style="width:64px" onchange="render()" title="移动速度（尺）">
+                    <span style="color:var(--text)">尺</span>
+                  </span>
+                  <label class="al-col" style="width:60px">奔跑速度</label>
+                  <span class="calc-auto" id="b-run-speed" style="width:90px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">身高</label>
+                  <input type="text" id="b-height" value="" style="width:70px">
+                  <label class="al-col" style="width:60px">体重</label>
+                  <input type="text" id="b-weight" value="" style="width:70px">
+                </div>
+                <div class="info-row">
+                  <label>语言</label>
+                  <input type="text" id="b-languages" value="" style="flex:1;min-width:200px">
+                  <label style="margin-left:12px">擅长</label>
+                  <input type="text" id="b-proficiencies" value="" style="flex:1;min-width:200px">
                 </div>
               </div>
             </div>
@@ -876,7 +964,7 @@
       <div class="section-body">
         <table class="gear-table" id="gear-table">
           <thead>
-            <tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">价值(gp)</th><th>备注</th><th class="g-act">操作</th></tr>
+            <tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">单价(gp)</th><th>备注</th><th class="g-act">操作</th></tr>
           </thead>
           <tbody id="gear-tbody"></tbody>
         </table>
@@ -919,6 +1007,7 @@
               <tbody>
                 <tr><td class="load-k">总价值</td><td class="load-v"><span id="total-value">0</span> gp</td></tr>
                 <tr><td class="load-k">总重量</td><td class="load-v"><span id="total-weight">0</span> 磅</td></tr>
+          <tr><td class="load-k">坐骑负重</td><td class="load-v"><span id="mount-weight">0</span> 磅</td></tr>
                 <tr><td class="load-k">负重体型</td><td class="load-v">
                   <select id="load-size" onchange="render()">
                     <option>超微型（二足）</option><option>超微型（四足）</option>
@@ -962,6 +1051,102 @@
       </div>
     </div>
 
+
+    <!-- 伙伴 -->
+    <div class="section" id="sec-partner-builder">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">伙伴</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="info-row">
+          <label>名称</label><input type="text" id="p-name" style="width:160px" onchange="renderPartner()">
+          <label style="margin-left:12px">生物类别</label><input type="text" id="p-type" style="width:160px" onchange="renderPartner()">
+        </div>
+        <div class="info-row">
+          <label>速度</label><input type="number" id="p-speed" style="width:80px" onchange="renderPartner()"> 尺
+          <label style="margin-left:12px">奔跑速度</label><span class="calc-auto" id="p-run-speed">—</span>
+          <label style="margin-left:12px">擅长</label><input type="text" id="p-proficiencies" style="width:220px" onchange="renderPartner()">
+        </div>
+        <div class="ability-grid-2x3" style="margin-top:8px">
+          <div class="ability-box"><div class="ab-name">力量 STR</div><div class="ab-mod" id="p-mod-str">+0</div><input type="number" class="ab-score" id="p-ab-str" value="10" onchange="renderPartner()"></div>
+          <div class="ability-box"><div class="ab-name">敏捷 DEX</div><div class="ab-mod" id="p-mod-dex">+0</div><input type="number" class="ab-score" id="p-ab-dex" value="10" onchange="renderPartner()"></div>
+          <div class="ability-box"><div class="ab-name">体质 CON</div><div class="ab-mod" id="p-mod-con">+0</div><input type="number" class="ab-score" id="p-ab-con" value="10" onchange="renderPartner()"></div>
+          <div class="ability-box"><div class="ab-name">智力 INT</div><div class="ab-mod" id="p-mod-int">+0</div><input type="number" class="ab-score" id="p-ab-int" value="10" onchange="renderPartner()"></div>
+          <div class="ability-box"><div class="ab-name">感知 WIS</div><div class="ab-mod" id="p-mod-wis">+0</div><input type="number" class="ab-score" id="p-ab-wis" value="10" onchange="renderPartner()"></div>
+          <div class="ability-box"><div class="ab-name">魅力 CHA</div><div class="ab-mod" id="p-mod-cha">+0</div><input type="number" class="ab-score" id="p-ab-cha" value="10" onchange="renderPartner()"></div>
+        </div>
+        <div class="data-top" style="margin-top:10px">
+          <div class="data-box"><div class="calc-row"><span class="calc-label">最大HP</span><input type="number" id="p-hp-max" style="width:90px" onchange="renderPartner()"></div></div>
+          <div class="data-box"><div class="calc-row"><span class="calc-label">视觉</span><input type="text" id="p-vision" style="width:160px" onchange="renderPartner()"></div></div>
+          <div class="data-box"><div class="calc-row"><span class="calc-label">BAB</span><input type="number" id="p-bab" style="width:80px" onchange="renderPartner()"></div></div>
+          <div class="data-box"><div class="init-row"><span class="st-label">先攻</span><span class="st-total" id="p-init-final">+0</span>
+            <span class="init-cell"><span class="init-k">专长</span><input type="number" id="p-init-feat" onchange="renderPartner()"></span>
+            <span class="init-cell"><span class="init-k">其他</span><input type="number" id="p-init-misc" onchange="renderPartner()"></span>
+            <span class="init-cell"><span class="init-k">属性</span><span class="st-val" id="p-init-attr">+0</span></span>
+          </div></div>
+        </div>
+        <div class="ac-block" style="margin-top:12px">
+          <div class="ac-flex">
+            <div class="ac-main">
+              <div class="ac-line">
+                <span class="ac-name">AC</span>
+                <span class="ac-total" id="p-ac-final">10</span>
+                <span class="ac-op">=</span>
+                <span class="ac-cell"><span class="ac-k">护甲</span><input type="number" id="p-armor-ac" onchange="renderPartner()"></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">盾牌</span><input type="number" id="p-shield-ac" onchange="renderPartner()"></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">天生防御</span><input type="number" id="p-nat" onchange="renderPartner()"></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">闪避</span><input type="number" id="p-dodge" onchange="renderPartner()"></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">偏斜</span><input type="number" id="p-deflect" onchange="renderPartner()"></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">体型</span><span class="ac-ro" id="p-size-final">+0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">属性</span><span class="ac-ro" id="p-ac-dex">+0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">其他</span><input type="number" id="p-ac-misc" onchange="renderPartner()"></span>
+              </div>
+            </div>
+            <div class="ac-side">
+              <div class="ac-stat"><span class="k">接触 AC</span><span class="v" id="p-touch-final">10</span></div>
+              <div class="ac-stat"><span class="k">措手不及</span><span class="v" id="p-flat-final">10</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="stat-row">
+          <table class="stat-table">
+            <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>基础</th><th>其他</th><th>合计</th></tr></thead>
+            <tbody>
+              <tr><td class="st-label">强韧豁免</td><td class="st-total" id="p-fort-final">+0</td><td><input type="number" id="p-fort-base" class="p-num" onchange="renderPartner()"></td><td><input type="number" id="p-fort-other" class="p-num" onchange="renderPartner()"></td><td class="st-val" id="p-fort-total">+0</td></tr>
+              <tr><td class="st-label">反射豁免</td><td class="st-total" id="p-ref-final">+0</td><td><input type="number" id="p-ref-base" class="p-num" onchange="renderPartner()"></td><td><input type="number" id="p-ref-other" class="p-num" onchange="renderPartner()"></td><td class="st-val" id="p-ref-total">+0</td></tr>
+              <tr><td class="st-label">意志豁免</td><td class="st-total" id="p-will-final">+0</td><td><input type="number" id="p-will-base" class="p-num" onchange="renderPartner()"></td><td><input type="number" id="p-will-other" class="p-num" onchange="renderPartner()"></td><td class="st-val" id="p-will-total">+0</td></tr>
+            </tbody>
+          </table>
+          <table class="stat-table">
+            <thead><tr><th style="width:70px"></th><th style="width:70px"></th><th>其他</th><th>BAB</th><th>属性</th><th>关键属性</th></tr></thead>
+            <tbody>
+              <tr><td class="st-label">CMB</td><td class="st-total" id="p-cmb-final">0</td><td><input type="number" id="p-cmb-other" class="p-num" onchange="renderPartner()"></td><td class="st-val" id="p-cmb-bab">+0</td><td class="st-val" id="p-cmb-attr">+0</td><td><select id="p-cmb-ability" onchange="renderPartner()"><option value="str">力量</option><option value="dex">敏捷</option></select></td></tr>
+              <tr><td class="st-label">CMD</td><td class="st-total" id="p-cmd-final">10</td><td><input type="number" id="p-cmd-other" class="p-num" onchange="renderPartner()"></td><td class="st-val" id="p-cmd-bab">+0</td><td class="st-val" id="p-cmd-attr">+0</td><td class="st-note">（+10）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:10px"><label>其他防御特性</label><input type="text" id="p-special-def" style="width:100%"></div>
+
+        <div class="section-title" style="margin:14px 0 6px;font-weight:700">技能</div>
+        <div class="skill-cols">
+          <div class="skill-col"><table class="skill-table"><thead><tr><th>受训</th><th>技能</th><th>等级</th><th>其他</th><th>合计</th></tr></thead><tbody id="p-skill-tbody-a"></tbody></table></div>
+          <div class="skill-col"><table class="skill-table"><thead><tr><th>受训</th><th>技能</th><th>等级</th><th>其他</th><th>合计</th></tr></thead><tbody id="p-skill-tbody-b"></tbody></table></div>
+        </div>
+
+        <div class="section-title" style="margin:14px 0 6px;font-weight:700">特性</div>
+        <table class="skill-table p-feat-table"><thead><tr><th style="width:32%">名称</th><th>概述</th><th style="width:56px">操作</th></tr></thead><tbody id="p-feat-tbody"></tbody></table>
+        <div style="margin-top:6px"><button class="btn btn-add btn-sm" onclick="addPartnerFeatRow()">+ 增加特性</button></div>
+      </div>
+    </div>
+
     <!-- 角色背景（单独一栏，放在最下面） -->
     <div class="section" id="sec-background-builder">
       <div class="section-header" onclick="toggleSection(this)">
@@ -977,6 +1162,7 @@
 
   <!-- ==================== 展示/战斗界面 ==================== -->
   <div id="display" class="view">
+    <div id="load-banner" class="load-banner"></div>
 
     <!-- 基础属性 -->
     <div class="section" id="sec-basic-display">
@@ -994,11 +1180,23 @@
                 <div class="info-row"><label>职业</label><span class="d-text" id="d-class">—</span></div>
                 <div class="info-row">
                   <label>种族</label><span class="d-text" id="d-race">—</span>
-                  <label style="margin-left:12px">阵营</label><span class="d-text" id="d-align">—</span>
                 </div>
                 <div class="info-row">
-                  <label>速度</label><span class="d-text" id="d-speed">—</span>
-                  <label style="margin-left:12px">奔跑速度</label><span class="d-text" id="d-run-speed">—</span>
+                  <label>阵营</label><span class="d-text" id="d-align" style="width:100px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">信仰</label><span class="d-text" id="d-faith" style="width:90px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">年龄</label><span class="d-text" id="d-age" style="width:70px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">性别</label><span class="d-text" id="d-gender" style="width:70px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">肤色</label><span class="d-text" id="d-skin" style="width:90px;display:inline-block">—</span>
+                </div>
+                <div class="info-row">
+                  <label>速度</label><span class="d-text" id="d-speed" style="width:100px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">奔跑速度</label><span class="d-text" id="d-run-speed" style="width:90px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">身高</label><span class="d-text" id="d-height" style="width:70px;display:inline-block">—</span>
+                  <label class="al-col" style="width:60px">体重</label><span class="d-text" id="d-weight" style="width:70px;display:inline-block">—</span>
+                </div>
+                <div class="info-row">
+                  <label>语言</label><span class="d-text" id="d-languages">—</span>
+                  <label style="margin-left:12px">擅长</label><span class="d-text" id="d-proficiencies">—</span>
                 </div>
               </div>
             </div>
@@ -1309,7 +1507,7 @@
           <b>已装备：</b><span id="d-equipped">—</span>
         </div>
         <table class="gear-table">
-          <thead><tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">价值(gp)</th><th>备注</th></tr></thead>
+          <thead><tr><th>名称</th><th class="g-qty">数量</th><th class="g-slot">位置</th><th class="g-wt">重量(磅)</th><th class="g-val">单价(gp)</th><th>备注</th></tr></thead>
           <tbody id="d-gear-tbody"></tbody>
         </table>
         <div class="purse-row">
@@ -1369,7 +1567,95 @@
       </div>
     </div>
 
+
     <!-- 角色背景（单独一栏，放在最下面） -->
+    <!-- 伙伴（展示） -->
+    <div class="section" id="sec-partner-display">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span class="section-title">伙伴</span>
+        <span class="section-toggle">▼</span>
+      </div>
+      <div class="section-body">
+        <div class="info-col" style="display:flex;flex-direction:column;gap:4px">
+          <div class="info-row"><label>名称</label><span class="d-text" id="d-p-name">—</span></div>
+          <div class="info-row"><label>生物类别</label><span class="d-text" id="d-p-type">—</span></div>
+          <div class="info-row"><label>速度</label><span class="d-text" id="d-p-speed">—</span>
+            <label>奔跑速度</label><span class="d-text" id="d-p-run-speed">—</span></div>
+          <div class="info-row"><label>擅长</label><span class="d-text" id="d-p-proficiencies">—</span></div>
+        </div>
+        <div class="ability-grid-2x3" style="margin-top:8px">
+          <div class="ability-box"><div class="ab-name">力量</div><div class="ab-mod" id="d-p-mod-str">+0</div><div class="ab-score" id="d-p-str">10</div></div>
+          <div class="ability-box"><div class="ab-name">敏捷</div><div class="ab-mod" id="d-p-mod-dex">+0</div><div class="ab-score" id="d-p-dex">10</div></div>
+          <div class="ability-box"><div class="ab-name">体质</div><div class="ab-mod" id="d-p-mod-con">+0</div><div class="ab-score" id="d-p-con">10</div></div>
+          <div class="ability-box"><div class="ab-name">智力</div><div class="ab-mod" id="d-p-mod-int">+0</div><div class="ab-score" id="d-p-int">10</div></div>
+          <div class="ability-box"><div class="ab-name">感知</div><div class="ab-mod" id="d-p-mod-wis">+0</div><div class="ab-score" id="d-p-wis">10</div></div>
+          <div class="ability-box"><div class="ab-name">魅力</div><div class="ab-mod" id="d-p-mod-cha">+0</div><div class="ab-score" id="d-p-cha">10</div></div>
+        </div>
+        <div class="data-top" style="margin-top:10px">
+          <div class="data-box"><div class="calc-row"><span class="calc-label">最大HP</span><span class="display-final" id="d-p-hp-max">0</span></div></div>
+          <div class="data-box"><div class="calc-row"><span class="calc-label">视觉</span><span class="calc-auto" id="d-p-vision">—</span></div></div>
+          <div class="data-box"><div class="calc-row"><span class="calc-label">BAB</span><span class="calc-auto" id="d-p-bab">+0</span></div></div>
+          <div class="data-box"><div class="calc-row"><span class="calc-label">先攻</span><span class="calc-auto" id="d-p-init-final">+0</span></div></div>
+        </div>
+        <div class="ac-block" style="margin-top:12px">
+          <div class="ac-flex">
+            <div class="ac-main">
+              <div class="ac-line">
+                <span class="ac-name">AC</span>
+                <span class="ac-total" id="d-p-ac-final">10</span>
+                <span class="ac-op">=</span>
+                <span class="ac-cell"><span class="ac-k">护甲</span><span class="ac-ro" id="d-p-armor">0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">盾牌</span><span class="ac-ro" id="d-p-shield">0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">天生防御</span><span class="ac-ro" id="d-p-nat">0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">闪避</span><span class="ac-ro" id="d-p-dodge">0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">偏斜</span><span class="ac-ro" id="d-p-deflect">0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">体型</span><span class="ac-ro" id="d-p-size">+0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">属性</span><span class="ac-ro" id="d-p-ac-dex">+0</span></span>
+                <span class="ac-op">+</span>
+                <span class="ac-cell"><span class="ac-k">其他</span><span class="ac-ro" id="d-p-ac-misc">0</span></span>
+              </div>
+            </div>
+            <div class="ac-side">
+              <div class="ac-stat"><span class="k">接触 AC</span><span class="v" id="d-p-touch-final">10</span></div>
+              <div class="ac-stat"><span class="k">措手不及</span><span class="v" id="d-p-flat-final">10</span></div>
+            </div>
+          </div>
+
+        </div>
+        <div class="stat-row">
+          <table class="stat-table">
+            <thead><tr><th style="width:96px"></th><th style="width:70px"></th><th>基础</th><th>其他</th><th>合计</th></tr></thead>
+            <tbody>
+              <tr><td class="st-label">强韧豁免</td><td class="st-total" id="d-p-fort-final">+0</td><td id="d-p-fort-base">0</td><td id="d-p-fort-other">0</td><td id="d-p-fort-total">+0</td></tr>
+              <tr><td class="st-label">反射豁免</td><td class="st-total" id="d-p-ref-final">+0</td><td id="d-p-ref-base">0</td><td id="d-p-ref-other">0</td><td id="d-p-ref-total">+0</td></tr>
+              <tr><td class="st-label">意志豁免</td><td class="st-total" id="d-p-will-final">+0</td><td id="d-p-will-base">0</td><td id="d-p-will-other">0</td><td id="d-p-will-total">+0</td></tr>
+            </tbody>
+          </table>
+          <table class="stat-table">
+            <thead><tr><th style="width:70px"></th><th style="width:70px"></th><th>其他</th><th>BAB</th><th>属性</th></tr></thead>
+            <tbody>
+              <tr><td class="st-label">CMB</td><td class="st-total" id="d-p-cmb-final">0</td><td id="d-p-cmb-other">0</td><td id="d-p-cmb-bab">+0</td><td id="d-p-cmb-attr">+0</td></tr>
+              <tr><td class="st-label">CMD</td><td class="st-total" id="d-p-cmd-final">10</td><td id="d-p-cmd-other">0</td><td id="d-p-cmd-bab">+0</td><td id="d-p-cmd-attr">+0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:10px"><label>其他防御特性</label><div id="d-p-special-def">—</div></div>
+        <div class="section-title" style="margin:14px 0 6px;font-weight:700">技能</div>
+        <div class="skill-cols">
+          <div class="skill-col"><table class="skill-table"><thead><tr><th>技能</th><th>等级</th><th>其他</th><th>合计</th></tr></thead><tbody id="d-p-skill-tbody-a"></tbody></table></div>
+          <div class="skill-col"><table class="skill-table"><thead><tr><th>技能</th><th>等级</th><th>其他</th><th>合计</th></tr></thead><tbody id="d-p-skill-tbody-b"></tbody></table></div>
+        </div>
+        <div class="section-title" style="margin:14px 0 6px;font-weight:700">特性</div>
+        <div id="d-p-feat-body" style="font-size:13px;line-height:1.6">—</div>
+      </div>
+    </div>
+
     <div class="section" id="sec-background-display">
       <div class="section-header" onclick="toggleSection(this)">
         <span class="section-title">角色背景</span>
@@ -1511,7 +1797,9 @@ function render(){
 
   // 护甲「最大敏捷」：限制 AC 的敏捷加值；留空 = 不限制
   const maxDexRaw = (document.getElementById('b-armor-maxdex')?.value || '').trim();
-  const maxDex = maxDexRaw === '' ? null : (parseInt(maxDexRaw) || 0);
+  let maxDex = maxDexRaw === '' ? null : (parseInt(maxDexRaw) || 0);
+  const loadMaxDex = currentLoadLevel().maxDex;   // 中载 3 / 重载 1
+  if(loadMaxDex !== null) maxDex = (maxDex === null ? loadMaxDex : Math.min(maxDex, loadMaxDex));
   const dexForAc = maxDex === null ? mods.dex : Math.min(mods.dex, maxDex);
 
   const acTotal = 10 + armor + shield + nat + dodge + deflect + sizeAc + dexForAc + acMisc;
@@ -1602,6 +1890,7 @@ function render(){
 
   // 同步展示
   updateDisplay();
+  renderPartner();
 }
 
 // 攻击模式：每条攻击单独勾选（双武器已移除）
@@ -1724,7 +2013,8 @@ function updateSkillWarning(){
 function armorCheckPenalty(){
   const a = Math.abs(parseInt(document.getElementById('b-armor-acp')?.value)||0);
   const s = Math.abs(parseInt(document.getElementById('b-shield-acp')?.value)||0);
-  return a + s;
+  const loadAcp = currentLoadLevel().acp;   // 中载 3 / 重载 6
+  return Math.max(a + s, loadAcp);
 }
 
 function renderSkills(entries, mods){
@@ -1889,6 +2179,10 @@ function updateDisplay(){
   document.getElementById('d-class').textContent = entries.map(e=>`${e.name}${e.variant?`（${e.variant}）`:''} ${e.level}`).join(' / ') || '—';
   document.getElementById('d-race').textContent = document.getElementById('b-race').value || '—';
   document.getElementById('d-align').textContent = document.getElementById('b-align').value || '—';
+  ['faith','age','gender','skin','height','weight','languages','proficiencies'].forEach(k=>{
+    const el = document.getElementById('d-'+k);
+    if(el) el.textContent = (document.getElementById('b-'+k)?.value || '') || '—';
+  });
 
   ['str','dex','con','int','wis','cha'].forEach(ab=>{
     const val = parseInt(document.getElementById('ab-'+ab).value)||10;
@@ -2137,7 +2431,7 @@ function renderDisplaySkills(mods, entries){
     const penalty = sk.acp ? acpPen : 0;
     const total = ranks + (mods[ability]||0) + csBonus + misc - penalty;
 
-    const favKey = 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'local');
+    const favKey = 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'blank');
     let favStore = null;
     try { favStore = JSON.parse(localStorage.getItem(favKey) || 'null'); } catch(e) { favStore = null; }
     if (!favStore) favStore = {};
@@ -2226,7 +2520,8 @@ function setPoolCurrent(el){
 const SLOT_LABELS = {
   weapon:'武器', armor:'盔甲', head:'头部', headband:'头带', body:'躯体', chest:'胸部',
   belt:'腰带', eyes:'眼睛', feet:'脚部', hands:'手部', neck:'颈部', ring:'戒指',
-  shield:'盾牌', shoulders:'肩部', wrist:'手臂', backpack:'背包'
+  shield:'盾牌', shoulders:'肩部', wrist:'手臂', backpack:'背包',
+  dimBag:'次元袋', mount:'坐骑'
 };
 
 // 钱袋：重量 = 数量 / 50（向下取整），与价值无关
@@ -2309,40 +2604,95 @@ function renderDisplayLoad(){
   const res = computeLoad();
   const tw = document.getElementById('total-weight')?.textContent || '0';
   const tv = document.getElementById('total-value')?.textContent || '0';
+  const mountWeight = (document.getElementById('mount-weight')?.textContent || '0');
   tbody.innerHTML = `
     <tr><td class="load-k">总价值</td><td class="load-v">${tv} gp</td></tr>
     <tr><td class="load-k">总重量</td><td class="load-v">${tw} 磅</td></tr>
+    <tr><td class="load-k">坐骑负重</td><td class="load-v">${mountWeight} 磅</td></tr>
     <tr><td class="load-k">负重体型</td><td class="load-v">${res.size}</td></tr>
     <tr><td class="load-k">额外负重</td><td class="load-v">+${res.enh} 力量</td></tr>
     <tr><td class="load-k">轻载</td><td class="load-v">${res.light} 磅</td></tr>
     <tr><td class="load-k">中载</td><td class="load-v">${res.medium} 磅</td></tr>
-    <tr><td class="load-k">重载</td><td class="load-v">${res.heavy} 磅</td></tr>`;
+    <tr><td class="load-k">重载</td><td class="load-v">${res.heavy} 磅</td></tr>
+    <tr><td class="load-k">当前负重等级</td><td class="load-v" id="d-load-level">${currentLoadLevel().level}</td></tr>`;
 }
 
 // ==================== 交互函数 ====================
 let currentView = 'builder';
+// ==================== 界面状态（视图 / 折叠）持久化 ====================
+const UI_VIEW_KEY = 'pf-card-ui-view-v1';
+const UI_SECTIONS_KEY = 'pf-card-ui-sections-v1';
+let uiRestoring = false;
+function saveUIState(){
+  if(uiRestoring) return;
+  try{
+    localStorage.setItem(UI_VIEW_KEY, currentView);
+    localStorage.setItem(UI_SECTIONS_KEY, JSON.stringify(SECTION_STATE));
+  }catch(e){}
+}
+function restoreUIState(){
+  uiRestoring = true;
+  try{
+    const secRaw = localStorage.getItem(UI_SECTIONS_KEY);
+    if(secRaw){
+      const obj = JSON.parse(secRaw);
+      Object.keys(obj || {}).forEach(k=>{ SECTION_STATE[k] = !!obj[k]; });
+    }
+    const v = localStorage.getItem(UI_VIEW_KEY);
+    if(v === 'display' || v === 'builder') switchView(v);
+    else applyAllSectionStates();
+  }catch(e){}
+  uiRestoring = false;
+}
+
 function switchView(viewName){
   currentView = viewName;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById(viewName).classList.add('active');
+  const noteFab = document.getElementById('noteFab');
+  if(noteFab){
+    noteFab.style.display = viewName === 'display' ? 'flex' : 'none';
+  }
+  if(viewName !== 'display') toggleNotes(false);
   const fab = document.getElementById('viewFab');
   if(fab){
     fab.textContent = viewName === 'builder' ? '展示' : '编辑';
     fab.classList.toggle('is-display', viewName === 'display');
   }
+  applyAllSectionStates();
   if(viewName==='display') updateDisplay();
-  toast(viewName === 'builder' ? '进入编辑模式' : '退出编辑模式');
+  if(!uiRestoring) toast(viewName === 'builder' ? '进入编辑模式' : '退出编辑模式');
+  saveUIState();
 }
 function toggleView(){
   switchView(currentView === 'builder' ? 'display' : 'builder');
 }
 
+// 折叠状态在「展示 / 编辑」两页之间共享：同一模块同步折叠/展开
+const SECTION_STATE = Object.create(null);
+function sectionBaseId(id){ return String(id || '').replace(/-(builder|display)$/, ''); }
+function applySectionState(base, collapsed){
+  document.querySelectorAll('.section').forEach(sec=>{
+    if(sectionBaseId(sec.id) !== base) return;
+    const body = sec.querySelector('.section-body');
+    const arrow = sec.querySelector('.section-toggle');
+    if(!body) return;
+    body.classList.toggle('collapsed', collapsed);
+    if(arrow){ arrow.classList.toggle('collapsed', collapsed); arrow.textContent = collapsed ? '▶' : '▼'; }
+  });
+}
+function applyAllSectionStates(){
+  Object.keys(SECTION_STATE).forEach(base => applySectionState(base, SECTION_STATE[base]));
+}
 function toggleSection(header){
+  const sec = header.closest('.section');
   const body = header.nextElementSibling;
-  const arrow = header.querySelector('.section-toggle');
-  body.classList.toggle('collapsed');
-  arrow.classList.toggle('collapsed');
-  arrow.textContent = body.classList.contains('collapsed') ? '▶' : '▼';
+  if(!sec || !body) return;
+  const collapsed = !body.classList.contains('collapsed');
+  const base = sectionBaseId(sec.id);
+  SECTION_STATE[base] = collapsed;
+  applySectionState(base, collapsed);
+  saveUIState();
 }
 
 function addClassRow(){
@@ -2511,7 +2861,7 @@ function addGearRow(){
 
 function handleGearSlot(select){
   const slot = select.value;
-  if(slot==='weapon' || slot==='ring' || slot==='backpack') return;
+  if(['weapon','ring','backpack','dimBag','mount'].includes(slot)) return;
   const tr = select.closest('tr');
   const tbody = tr.parentElement;
   Array.from(tbody.children).forEach(other=>{
@@ -2523,21 +2873,79 @@ function handleGearSlot(select){
   render();
 }
 
-function updateGearStats(){
+// 钱袋总重量（每 50 枚 1 磅，向下取整）
+function coinWeight(){
+  const v = id => parseFloat(document.getElementById(id)?.value)||0;
+  return Math.floor((v('coin-pp') + v('coin-gp') + v('coin-sp') + v('coin-cp')) / 50);
+}
+// 装备/道具汇总：次元袋与坐骑里的物品不计重量，但仍计价值
+function gearTotals(){
   const tbody = document.getElementById('gear-tbody');
-  let totalWeight=0, totalValue=0;
-  Array.from(tbody.children).forEach(tr=>{
-    const qty = parseInt(tr.querySelector('.gear-qty')?.value)||0;
-    const w = parseFloat(tr.querySelector('.gear-weight')?.value)||0;
-    totalWeight += w * qty;            // 单件重量 × 数量
-    totalValue += parseFloat(tr.querySelector('.gear-value')?.value)||0;
-  });
-  // 护甲 / 盾牌 重量也计入总负重
-  totalWeight += (parseFloat(document.getElementById('b-armor-weight')?.value)||0)
-               + (parseFloat(document.getElementById('b-shield-weight')?.value)||0);
-  document.getElementById('total-weight').textContent = totalWeight.toFixed(1);
-  document.getElementById('total-value').textContent = totalValue.toFixed(0);
+  let weight = 0, value = 0;
+  if(tbody){
+    Array.from(tbody.children).forEach(tr=>{
+      const qty = parseInt(tr.querySelector('.gear-qty')?.value)||0;
+      const w = parseFloat(tr.querySelector('.gear-weight')?.value)||0;
+      const v = parseFloat(tr.querySelector('.gear-value')?.value)||0;
+      const slot = tr.querySelector('.gear-slot')?.value || 'backpack';
+      value += v * qty;                                   // 单价 × 数量
+      if(slot !== 'dimBag' && slot !== 'mount') weight += w * qty;
+    });
+  }
+  // 护甲 / 盾牌：单价与重量都计入
+  let mountWeight = 0;
+  if(tbody){
+    Array.from(tbody.children).forEach(tr=>{
+      if((tr.querySelector('.gear-slot')?.value) === 'mount'){
+        const qty = parseInt(tr.querySelector('.gear-qty')?.value)||0;
+        const w = parseFloat(tr.querySelector('.gear-weight')?.value)||0;
+        mountWeight += w * qty;
+      }
+    });
+  }
+  value += (parseFloat(document.getElementById('b-armor-price')?.value)||0)
+         + (parseFloat(document.getElementById('b-shield-price')?.value)||0);
+  weight += (parseFloat(document.getElementById('b-armor-weight')?.value)||0)
+          + (parseFloat(document.getElementById('b-shield-weight')?.value)||0);
+  // 钱袋重量
+  weight += coinWeight();
+  return { weight, value, mountWeight };
+}
+function fmtGp(v){
+  return (Math.round(v * 100) / 100).toFixed(2).replace(/\.00$/, '');
+}
+function currentLoadLevel(){
+  const res = computeLoad();
+  const tw = gearTotals().weight;
+  const light = parseFloat(res.light)||0, medium = parseFloat(res.medium)||0, heavy = parseFloat(res.heavy)||0;
+  if(tw <= light) return { level: '轻载', weight: tw, acp: 0, maxDex: null };
+  if(tw <= medium) return { level: '中载', weight: tw, acp: 3, maxDex: 3 };
+  if(tw <= heavy) return { level: '重载', weight: tw, acp: 6, maxDex: 1 };
+  return { level: '超载', weight: tw, acp: 6, maxDex: 1 };
+}
+function updateGearStats(){
+  const totals = gearTotals();
+  document.getElementById('total-weight').textContent = totals.weight.toFixed(1);
+  document.getElementById('total-value').textContent = fmtGp(totals.value);
+  const mw = document.getElementById('mount-weight');
+  if(mw) mw.textContent = totals.mountWeight.toFixed(1);
   computeLoad();
+  updateLoadBanner();
+}
+function updateLoadBanner(){
+  const el = document.getElementById('load-banner');
+  if(!el) return;
+  const lv = currentLoadLevel().level;
+  el.className = 'load-banner';
+  if(lv === '超载'){
+    el.textContent = '角色超载！无法行动！';
+    el.classList.add('overload');
+  } else if(lv === '重载'){
+    el.textContent = '角色重载！AC、部分技能加值等可能受影响';
+    el.classList.add('heavyload');
+  } else {
+    el.textContent = '';
+  }
 }
 
 // ==================== 负重（PF1e 负重表） ====================
@@ -2702,6 +3110,8 @@ function collectCharacterData(){
   }));
 
   return {
+    get notes(){ notesSyncFromEditor(); return notesPages.map(pg=>({ page: pg.n, html: cleanNotePlaceholders(pg.html) })); },
+    partner: collectPartner(),
     schema: 'pf1e-card',
     version: 3,
     exportedAt: new Date().toISOString(),
@@ -2763,6 +3173,14 @@ function collectCharacterData(){
       raceName: document.getElementById('b-race').value,
       size: sizeLabel(),
       align: document.getElementById('b-align').value,
+      faith: document.getElementById('b-faith')?.value || '',
+      age: document.getElementById('b-age')?.value || '',
+      gender: document.getElementById('b-gender')?.value || '',
+      skin: document.getElementById('b-skin')?.value || '',
+      height: document.getElementById('b-height')?.value || '',
+      weight: document.getElementById('b-weight')?.value || '',
+      languages: document.getElementById('b-languages')?.value || '',
+      proficiencies: document.getElementById('b-proficiencies')?.value || '',
       background: document.getElementById('b-background').value,
       speed: parseInt(document.getElementById('b-speed')?.value) || 0,
       runSpeed: (parseInt(document.getElementById('b-speed')?.value) || 0) * ((document.getElementById('b-armor-type')?.value || '').includes('重甲') ? 3 : 4),
@@ -2915,6 +3333,15 @@ function loadCharacterData(data){
     document.getElementById('b-player').value = data.meta.player||'';
     document.getElementById('b-race').value = data.meta.race||'';
     document.getElementById('b-align').value = data.meta.align||'';
+  ['faith','age','gender','skin','height','weight','languages','proficiencies'].forEach(k=>{
+    const el = document.getElementById('b-'+k);
+    if(el) el.value = data.meta[k] || '';
+  });
+  if(data.notes != null){
+    notesPages = decodeNotesPages(data.notes);
+    notesActive = 0;
+    notesLoadActive(); renderNoteTabs();
+  }
     document.getElementById('b-background').value = data.meta.background||'';
   }
   if(data.combat){
@@ -3081,6 +3508,7 @@ function loadCharacterData(data){
       tbody.appendChild(tr);
     });
   }
+  if(data.partner) loadPartner(data.partner);
   if(data.coins){
     ['pp','gp','sp','cp'].forEach(k=>{
       const el = document.getElementById('coin-'+k);
@@ -3130,10 +3558,10 @@ function loadCharacterData(data){
 
 function getSlotOptions(selected){
   const opts = [
-    ['weapon','武器'],['head','头部'],['headband','头带'],
-    ['body','躯体'],['chest','胸部'],['belt','腰带'],['eyes','眼睛'],
-    ['feet','脚部'],['hands','手部'],['neck','颈部'],['ring','戒指'],
-    ['shoulders','肩部'],['wrist','手臂'],['backpack','背包']
+    ['backpack','背包'],['dimBag','次元袋'],['mount','坐骑'],
+    ['head','头部'],['headband','头带'],['body','躯体'],['chest','胸部'],
+    ['belt','腰带'],['eyes','眼睛'],['feet','脚部'],['hands','手部'],
+    ['neck','颈部'],['ring','戒指'],['shoulders','肩部'],['wrist','手臂']
   ];
   return opts.map(([k,v])=>`<option value="${k}"${k===selected?' selected':''}>${v}</option>`).join('');
 }
@@ -3143,7 +3571,7 @@ function getSlotOptions(selected){
 // 初始化
 // ==================== 角色肖像（仅本地） ====================
 // 肖像不进入导出 JSON、不进入 OBR 卡面，只存在本机 localStorage。
-const PORTRAIT_KEY = 'pf-card-portrait-v2';
+const PORTRAIT_KEY = 'pf-card-portrait-blank-v1';
 function applyPortrait(src){
   ['portrait','d-portrait'].forEach(prefix=>{
     const img = document.getElementById(prefix+'-img');
@@ -3178,10 +3606,13 @@ function handlePortrait(ev){
 // ==================== 本机保存（手动） ====================
 // 只有点「保存角色」才写入本机；不做自动保存。
 // 跨设备 / 清缓存都会丢，长期保存请用「导出角色」下载 JSON。
-const LOCAL_SAVE_KEY = 'pf-card-local-save-v2';
+const LOCAL_SAVE_KEY = 'pf-card-local-save-blank-v1';
 function saveCharacterLocal(){
   try{
-    localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(collectCharacterData()));
+    notesSyncFromEditor();
+    const data = collectCharacterData();
+    data.notes = notesPages.map(pg=>({ page: pg.n, html: cleanNotePlaceholders(pg.html) }));
+    localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(data));
     toast('已保存到本机！清除缓存会导致数据丢失，建议点击【导出角色】下载JSON文件并手动保存', 6000);
   }catch(e){
     toast('保存失败：' + (e && e.message ? e.message : e), 5000);
@@ -3196,6 +3627,519 @@ function restoreLocalSave(){
     loadCharacterData(data);
     return true;
   }catch(e){ return false; }
+}
+
+// ==================== 笔记 ====================
+const NOTE_DRAFT_KEY = 'pf-card-notes-draft-blank-v1';
+const FIXED_PAGES = 4;       // 前 4 页固定，不可删除
+const NOTE_MAX_PAGES = 10;   // 页数上限（绝对数量），与页码编号无关
+// notesPages: [{ n: 页编号, html: 内容 }]，编号不随删除重排
+let notesPages = [1, 2, 3, 4].map(n => ({ n, html: '' }));
+let notesActive = 0;
+let noteSavedRange = null;
+function cleanNotePlaceholders(html){
+  let out = String(html == null ? '' : html);
+  out = out.replace(/<span[^>]*style="[^"]*color:[^"]*"[^>]*>\u200b<\/span>/gi, '');
+  out = out.replace(/\u200b/g, '');
+  return out;
+}
+
+function notesNextNumber(){
+  return notesPages.reduce((max, pg) => Math.max(max, pg.n), 0) + 1;
+}
+function decodeNotesPages(raw){
+  let list = [];
+  if(Array.isArray(raw)){
+    let auto = 0;
+    for(const item of raw){
+      if(item && typeof item === 'object' && !Array.isArray(item)){
+        const n = Number(item.page);
+        list.push({ n: Number.isFinite(n) && n > 0 ? n : ++auto, html: cleanNotePlaceholders(item.html) });
+      } else {
+        list.push({ n: ++auto, html: cleanNotePlaceholders(item) });
+      }
+    }
+  } else if(raw != null){
+    list = [{ n: 1, html: cleanNotePlaceholders(raw) }];
+  }
+  // 补齐前 4 页
+  for(let i = 1; i <= FIXED_PAGES; i++){
+    if(!list.some(pg => pg.n === i)) list.push({ n: i, html: '' });
+  }
+  list.sort((a, b) => a.n - b.n);
+  if(list.length > NOTE_MAX_PAGES) list = list.slice(0, NOTE_MAX_PAGES);
+  return list;
+}
+function notesEditor(){ return document.getElementById('noteEditor'); }
+function notesSyncFromEditor(){
+  const ed = notesEditor();
+  if (ed && notesPages[notesActive]) notesPages[notesActive].html = ed.innerHTML;
+}
+function notesLoadActive(){
+  const ed = notesEditor();
+  if (ed) ed.innerHTML = notesPages[notesActive] ? notesPages[notesActive].html : '';
+}
+function renderNoteTabs(){
+  const bar = document.getElementById('noteTabs');
+  if (!bar) return;
+  const parts = [];
+  notesPages.forEach((pg, i) => {
+    const pageBtn = '<button type="button" class="note-tab' + (i === notesActive ? ' on' : '') + '" data-page="' + i + '">' + pg.n + '</button>';
+    if (pg.n > FIXED_PAGES) {
+      parts.push('<span class="note-tab-wrap">' + pageBtn +
+        '<button type="button" class="note-tab note-tab-del" data-del="' + i + '" title="删除第 ' + pg.n + ' 页">×</button></span>');
+    } else {
+      parts.push(pageBtn);
+    }
+  });
+  if (notesPages.length < NOTE_MAX_PAGES) {
+    parts.push('<button type="button" class="note-tab" data-add="1" title="新增页">+</button>');
+  }
+  bar.innerHTML = parts.join('');
+}
+function saveNotesDraft(){
+  try{
+    notesSyncFromEditor();
+    localStorage.setItem(NOTE_DRAFT_KEY, JSON.stringify({ pages: notesPages, active: notesActive }));
+  }catch(e){}
+}
+function toggleNotes(force){
+  const panel = document.getElementById('notePanel');
+  const fab = document.getElementById('noteFab');
+  if(!panel || !fab) return;
+  const open = typeof force === 'boolean' ? force : panel.style.display === 'none';
+  panel.style.display = open ? 'flex' : 'none';
+  fab.classList.toggle('on', open);
+  if(open){
+    renderNoteTabs();
+    const ed = notesEditor();
+    if(ed) setTimeout(()=>ed.focus(), 0);
+  } else {
+    saveNotesDraft();
+  }
+}
+function setNoteActiveColor(color){
+  const palette = document.getElementById('notePalette');
+  if(!palette) return;
+  palette.querySelectorAll('button[data-color]').forEach(btn=>{
+    btn.classList.toggle('on', btn.dataset.color.toLowerCase() === String(color).toLowerCase());
+  });
+}
+function applyNoteColor(color){
+  const ed = notesEditor();
+  if(!ed) return;
+  const selNow = window.getSelection();
+  let range = null;
+  if(selNow && selNow.rangeCount > 0 && ed.contains(selNow.anchorNode)){
+    range = selNow.getRangeAt(0).cloneRange();
+  } else if(noteSavedRange){
+    range = noteSavedRange.cloneRange();
+  }
+  ed.focus();
+  const sel = window.getSelection();
+  if(range){ sel.removeAllRanges(); sel.addRange(range); }
+  try{
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand('foreColor', false, color);
+  }catch(err){
+    console.warn('[note] color failed', err);
+  }
+  if(sel.rangeCount > 0) noteSavedRange = sel.getRangeAt(0).cloneRange();
+  setNoteActiveColor(color);
+  saveNotesDraft();
+}
+function bindNotes(){
+  const toolbar = document.querySelector('.note-toolbar');
+  const editor = notesEditor();
+  if(!editor || editor.dataset.bound === '1') return;
+  editor.dataset.bound = '1';
+  toolbar?.addEventListener('mousedown', e=>{
+    if(e.target.closest('button') || e.target.closest('select')) e.preventDefault();
+  });
+  toolbar?.addEventListener('click', e=>{
+    const btn = e.target.closest('button[data-cmd]');
+    if(!btn) return;
+    e.preventDefault();
+    document.execCommand(btn.dataset.cmd, false, null);
+    editor.focus();
+    saveNotesDraft();
+  });
+  const paletteEl = document.getElementById('notePalette');
+  paletteEl?.addEventListener('mousedown', e=>{
+    const sw = e.target.closest('button[data-color]');
+    if(!sw) return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyNoteColor(sw.dataset.color);
+    setNoteActiveColor(sw.dataset.color);
+  });
+  paletteEl?.addEventListener('click', e=>{
+    const sw = e.target.closest('button[data-color]');
+    if(!sw) return;
+    e.preventDefault();
+    if(e.detail === 0){
+      applyNoteColor(sw.dataset.color);
+      setNoteActiveColor(sw.dataset.color);
+    }
+  });
+  editor.addEventListener('input', saveNotesDraft);
+
+  const bar = document.getElementById('noteTabs');
+  if(bar && bar.dataset.bound !== '1'){
+    bar.dataset.bound = '1';
+    bar.addEventListener('click', e=>{
+      const add = e.target.closest('[data-add]');
+      if(add){
+        if(notesPages.length >= NOTE_MAX_PAGES) return;
+        notesSyncFromEditor();
+        const n = notesNextNumber();
+        notesPages.push({ n, html: '' });
+        notesActive = notesPages.length - 1;
+        notesLoadActive(); renderNoteTabs(); saveNotesDraft();
+        return;
+      }
+      const del = e.target.closest('[data-del]');
+      if(del){
+        const idx = Number(del.dataset.del);
+        const pg = notesPages[idx];
+        if(!pg || pg.n <= FIXED_PAGES) return;
+        notesSyncFromEditor();
+        notesPages.splice(idx, 1);
+        if(notesActive >= notesPages.length) notesActive = notesPages.length - 1;
+        else if(notesActive > idx) notesActive--;
+        notesLoadActive(); renderNoteTabs(); saveNotesDraft();
+        toast('已删除第 ' + pg.n + ' 页');
+        return;
+      }
+      const tab = e.target.closest('[data-page]');
+      if(tab){
+        const idx = Number(tab.dataset.page);
+        if(idx === notesActive) return;
+        notesSyncFromEditor();
+        notesActive = idx;
+        notesLoadActive(); renderNoteTabs(); saveNotesDraft();
+      }
+    });
+  }
+
+  document.addEventListener('mousedown', e=>{
+    const panel = document.getElementById('notePanel');
+    if(!panel || panel.style.display === 'none') return;
+    if(panel.contains(e.target) || e.target.closest('#noteFab')) return;
+    toggleNotes(false);
+  });
+}
+function loadNotesDraftIfEmpty(){
+  try{
+    const raw = localStorage.getItem(NOTE_DRAFT_KEY);
+    if(!raw) return;
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    if(parsed && Array.isArray(parsed.pages)){
+      if(!notesPages.some(pg=>pg.html && pg.html.trim())){
+        notesPages = decodeNotesPages(parsed.pages);
+        notesActive = Math.min(Math.max(Number(parsed.active) || 0, 0), notesPages.length - 1);
+        notesLoadActive(); renderNoteTabs();
+      }
+    }
+  }catch(e){}
+}
+
+
+// ==================== 伙伴（独立数据） ====================
+const P_ABILITIES = ['str','dex','con','int','wis','cha'];
+function pVal(id){ return parseInt(document.getElementById('p-'+id)?.value)||0; }
+function pMods(){
+  const m = {};
+  P_ABILITIES.forEach(k=>{
+    const score = parseInt(document.getElementById('p-ab-'+k)?.value)||10;
+    m[k] = Math.floor((score-10)/2);
+  });
+  return m;
+}
+function buildPartnerSkills(){
+  const a = document.getElementById('p-skill-tbody-a');
+  const b = document.getElementById('p-skill-tbody-b');
+  if(!a || !b || a.children.length) return;
+  const sorted = [...window.SKILLS].sort((x,y)=>{
+    const ia = ABILITY_ORDER.indexOf(x.ability), ib = ABILITY_ORDER.indexOf(y.ability);
+    return (ia-ib) || String(x.name).localeCompare(String(y.name),'zh');
+  });
+  const half = Math.ceil(sorted.length/2);
+  let ha='', hb='';
+  sorted.forEach((sk, idx)=>{
+    const row = '<tr data-skill="'+sk.id+'">'
+      + '<td><input type="checkbox" class="p-skill-cs" data-id="'+sk.id+'" onchange="renderPartner()"></td>'
+      + '<td class="skill-name p-skill-name">'+skillLabel(sk)+'</td>'
+      + '<td><input type="number" class="p-skill-rank p-num" data-id="'+sk.id+'" onchange="renderPartner()"></td>'
+      + '<td><input type="number" class="p-skill-misc p-num" data-id="'+sk.id+'" onchange="renderPartner()"></td>'
+      + '<td class="p-skill-total" data-id="'+sk.id+'">+0</td></tr>';
+    if(idx < half) ha += row; else hb += row;
+  });
+  a.innerHTML = ha; b.innerHTML = hb;
+}
+function buildPartnerSkillDisplay(){
+  const a = document.getElementById('d-p-skill-tbody-a');
+  const b = document.getElementById('d-p-skill-tbody-b');
+  if(!a || !b || a.children.length) return;
+  const sorted = [...window.SKILLS].sort((x,y)=>{
+    const ia = ABILITY_ORDER.indexOf(x.ability), ib = ABILITY_ORDER.indexOf(y.ability);
+    return (ia-ib) || String(x.name).localeCompare(String(y.name),'zh');
+  });
+  const half = Math.ceil(sorted.length/2);
+  let ha='', hb='';
+  sorted.forEach((sk, idx)=>{
+    const row = '<tr><td class="skill-name p-skill-name">'+skillLabel(sk)+'</td>'
+      + '<td id="d-p-rank-'+sk.id+'">0</td>'
+      + '<td id="d-p-misc-'+sk.id+'">0</td>'
+      + '<td class="p-skill-total" id="d-p-total-'+sk.id+'">+0</td></tr>';
+    if(idx < half) ha += row; else hb += row;
+  });
+  a.innerHTML = ha; b.innerHTML = hb;
+}
+function partnerAcp(){
+  return Math.abs(parseInt(document.getElementById('p-armor-acp')?.value)||0)
+       + Math.abs(parseInt(document.getElementById('p-shield-acp')?.value)||0);
+}
+function renderPartner(){
+  if(!document.getElementById('p-ab-str')) return;
+  buildPartnerSkills(); buildPartnerSkillDisplay();
+  const mods = pMods();
+  P_ABILITIES.forEach(k=>{
+    const mEl = document.getElementById('p-mod-'+k);
+    if(mEl) mEl.textContent = (mods[k]>=0?'+':'')+mods[k];
+  });
+  const speed = pVal('speed');
+  const runEl = document.getElementById('p-run-speed');
+  if(runEl) runEl.textContent = speed ? (speed*4) + ' 尺' : '—';
+
+  const armor = Math.abs(pVal('armor-ac'));
+  const shield = Math.abs(pVal('shield-ac'));
+  const nat = pVal('nat'), dodge = pVal('dodge'), deflect = pVal('deflect'), acMisc = pVal('ac-misc');
+  const rawMax = document.getElementById('p-armor-maxdex')?.value || '';
+  const maxDex = rawMax.trim()==='' ? null : (parseInt(rawMax)||0);
+  const dexForAc = maxDex===null ? mods.dex : Math.min(mods.dex, maxDex);
+  const ac = 10 + armor + shield + nat + dodge + deflect + dexForAc + acMisc;
+  const touch = 10 + dodge + deflect + dexForAc + acMisc;
+  const flat = 10 + armor + shield + nat + deflect + acMisc;
+  const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  set('p-ac-final', ac); set('p-ac-dex',(dexForAc>=0?'+':'')+dexForAc);
+  set('p-touch-final', touch); set('p-flat-final', flat);
+
+  const bab = pVal('bab');
+  set('p-init-attr', (mods.dex>=0?'+':'')+mods.dex);
+  set('p-init-final', (bab?0:0) + 0); // placeholder overwritten below
+  const init = mods.dex + pVal('init-feat') + pVal('init-misc');
+  set('p-init-final', (init>=0?'+':'')+init);
+
+  const fort = pVal('fort-base') + pVal('fort-other') + mods.con;
+  const ref  = pVal('ref-base') + pVal('ref-other') + mods.dex;
+  const will = pVal('will-base') + pVal('will-other') + mods.wis;
+  set('p-fort-final',(fort>=0?'+':'')+fort);
+  set('p-ref-final',(ref>=0?'+':'')+ref);
+  set('p-will-final',(will>=0?'+':'')+will);
+  set('p-fort-total',(fort>=0?'+':'')+fort);
+  set('p-ref-total',(ref>=0?'+':'')+ref);
+  set('p-will-total',(will>=0?'+':'')+will);
+
+  const cmbAbility = document.getElementById('p-cmb-ability')?.value || 'str';
+  const cmb = bab + mods[cmbAbility] + pVal('cmb-other');
+  const cmd = 10 + bab + mods.str + mods.dex + pVal('cmd-other');
+  set('p-cmb-final', cmb);
+  set('p-cmb-bab',(bab>=0?'+':'')+bab);
+  set('p-cmb-attr',(mods[cmbAbility]>=0?'+':'')+mods[cmbAbility]);
+  set('p-cmd-final', cmd);
+  set('p-cmd-bab',(bab>=0?'+':'')+bab);
+  set('p-cmd-attr',(mods.str+mods.dex>=0?'+':'')+(mods.str+mods.dex));
+
+  const acp = partnerAcp();
+  const skillTotal = id => {
+    const sk = window.SKILLS.find(s=>s.id===id) || {ability:'int'};
+    const rank = parseInt(document.querySelector('#p-skill-tbody-a .p-skill-rank[data-id="'+id+'"]')?.value || document.querySelector('#p-skill-tbody-b .p-skill-rank[data-id="'+id+'"]')?.value)||0;
+    const misc = parseInt(document.querySelector('#p-skill-tbody-a .p-skill-misc[data-id="'+id+'"]')?.value || document.querySelector('#p-skill-tbody-b .p-skill-misc[data-id="'+id+'"]')?.value)||0;
+    const cs = document.querySelector('.p-skill-cs[data-id="'+id+'"]')?.checked;
+    const pen = sk.acp ? acp : 0;
+    return rank + (mods[sk.ability]||0) + (cs&&rank>0?3:0) + misc - pen;
+  };
+  document.querySelectorAll('.p-skill-total[data-id]').forEach(el=>{
+    const id = el.dataset.id;
+    const v = skillTotal(id);
+    el.textContent = (v>=0?'+':'')+v;
+  });
+  updatePartnerDisplay(mods, mods? ac:0, {ac,touch,flat,dexForAc,maxDex,acp,fort,ref,will,cmb,cmd,init,bab,speed,mods});
+}
+function updatePartnerDisplay(mods, _ac, vals){
+  const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  set('d-p-name', document.getElementById('p-name')?.value || '—');
+  set('d-p-type', document.getElementById('p-type')?.value || '—');
+  set('d-p-speed', (pVal('speed')||0) ? pVal('speed')+' 尺' : '—');
+  set('d-p-run-speed', pVal('speed') ? (pVal('speed')*4)+' 尺' : '—');
+  set('d-p-proficiencies', document.getElementById('p-proficiencies')?.value || '—');
+  set('d-p-hp-max', pVal('hp-max'));
+  set('d-p-vision', document.getElementById('p-vision')?.value || '—');
+  set('d-p-bab', (pVal('bab')>=0?'+':'')+pVal('bab'));
+  set('d-p-init-final', (vals.init>=0?'+':'')+vals.init);
+  P_ABILITIES.forEach(k=>{
+    const score = parseInt(document.getElementById('p-ab-'+k)?.value)||10;
+    set('d-p-'+k, score);
+    set('d-p-mod-'+k, ((vals.mods[k]||0)>=0?'+':'')+(vals.mods[k]||0));
+  });
+  set('d-p-ac-final', vals.ac);
+  set('d-p-armor', Math.abs(pVal('armor-ac')));
+  set('d-p-shield', Math.abs(pVal('shield-ac')));
+  set('d-p-nat', pVal('nat')); set('d-p-dodge', pVal('dodge'));
+  set('d-p-deflect', pVal('deflect')); set('d-p-ac-misc', pVal('ac-misc'));
+  set('d-p-ac-dex', (vals.dexForAc>=0?'+':'')+vals.dexForAc);
+  set('d-p-touch-final', vals.touch); set('d-p-flat-final', vals.flat);
+  set('d-p-maxdex', vals.maxDex===null ? '—' : vals.maxDex);
+  set('d-p-acp', vals.acp);
+  set('d-p-fort-final',(vals.fort>=0?'+':'')+vals.fort);
+  set('d-p-ref-final',(vals.ref>=0?'+':'')+vals.ref);
+  set('d-p-will-final',(vals.will>=0?'+':'')+vals.will);
+  set('d-p-fort-base', pVal('fort-base')); set('d-p-fort-other', pVal('fort-other'));
+  set('d-p-ref-base', pVal('ref-base')); set('d-p-ref-other', pVal('ref-other'));
+  set('d-p-will-base', pVal('will-base')); set('d-p-will-other', pVal('will-other'));
+  set('d-p-cmb-final', vals.cmb); set('d-p-cmb-other', pVal('cmb-other'));
+  set('d-p-cmb-bab',(pVal('bab')>=0?'+':'')+pVal('bab'));
+  const cmbAbility = document.getElementById('p-cmb-ability')?.value || 'str';
+  set('d-p-cmb-attr', ((vals.mods[cmbAbility]||0)>=0?'+':'')+(vals.mods[cmbAbility]||0));
+  set('d-p-cmd-final', vals.cmd); set('d-p-cmd-other', pVal('cmd-other'));
+  set('d-p-cmd-bab',(pVal('bab')>=0?'+':'')+pVal('bab'));
+  set('d-p-cmd-attr', ((vals.mods.str+vals.mods.dex)>=0?'+':'')+(vals.mods.str+vals.mods.dex));
+  set('d-p-special-def', document.getElementById('p-special-def')?.value || '—');
+  // display skills
+  document.querySelectorAll('.p-skill-total[data-id]').forEach(el=>{
+    const id = el.dataset.id;
+    const totalEl = document.getElementById('d-p-total-'+id);
+    if(totalEl) totalEl.textContent = el.textContent;
+    const rankEl = document.querySelector('#p-skill-tbody-a .p-skill-rank[data-id="'+id+'"]') || document.querySelector('#p-skill-tbody-b .p-skill-rank[data-id="'+id+'"]');
+    const miscEl = document.querySelector('#p-skill-tbody-a .p-skill-misc[data-id="'+id+'"]') || document.querySelector('#p-skill-tbody-b .p-skill-misc[data-id="'+id+'"]');
+    const dRank = document.getElementById('d-p-rank-'+id); if(dRank) dRank.textContent = rankEl?.value || 0;
+    const dMisc = document.getElementById('d-p-misc-'+id); if(dMisc) dMisc.textContent = miscEl?.value || 0;
+  });
+  // features display
+  const fb = document.getElementById('d-p-feat-body');
+  if(fb){
+    const rows = Array.from(document.querySelectorAll('#p-feat-tbody tr'));
+    fb.innerHTML = rows.map(tr=>{
+      const n = tr.querySelector('.p-feat-name')?.value || '';
+      const d = tr.querySelector('.p-feat-desc')?.value || '';
+      if(!n && !d) return '';
+      return '<div style="margin-bottom:6px"><b>'+(n||'—')+'</b><div>'+(d||'')+'</div></div>';
+    }).join('') || '—';
+  }
+}
+function addPartnerFeatRow(name, desc){
+  const tbody = document.getElementById('p-feat-tbody');
+  if(!tbody) return;
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td><input type="text" class="p-feat-name" value="'+(name||'').replace(/"/g,'&quot;')+'" onchange="renderPartner()"></td>'
+    + '<td><input type="text" class="p-feat-desc" value="'+(desc||'').replace(/"/g,'&quot;')+'" onchange="renderPartner()"></td>'
+    + '<td><button class="btn btn-del btn-sm" onclick="this.closest(\'tr\').remove();renderPartner()">×</button></td>';
+  tbody.appendChild(tr);
+}
+function collectPartner(){
+  const skills = {};
+  document.querySelectorAll('#p-skill-tbody-a tr, #p-skill-tbody-b tr').forEach(tr=>{
+    const id = tr.dataset.skill;
+    if(!id) return;
+    const cs = tr.querySelector('.p-skill-cs')?.checked || false;
+    const rank = parseInt(tr.querySelector('.p-skill-rank')?.value)||0;
+    const misc = parseInt(tr.querySelector('.p-skill-misc')?.value)||0;
+    if(!cs && !rank && !misc) return;
+    skills[id] = { cs, rank, misc };
+  });
+  const features = Array.from(document.querySelectorAll('#p-feat-tbody tr')).map(tr=>({
+    name: tr.querySelector('.p-feat-name')?.value || '',
+    desc: tr.querySelector('.p-feat-desc')?.value || ''
+  })).filter(f=>f.name || f.desc);
+  return {
+    name: document.getElementById('p-name')?.value || '',
+    type: document.getElementById('p-type')?.value || '',
+    speed: pVal('speed'),
+    runSpeed: pVal('speed')*4,
+    proficiencies: document.getElementById('p-proficiencies')?.value || '',
+    abilities: { str: parseInt(document.getElementById('p-ab-str')?.value)||10, dex: parseInt(document.getElementById('p-ab-dex')?.value)||10, con: parseInt(document.getElementById('p-ab-con')?.value)||10, int: parseInt(document.getElementById('p-ab-int')?.value)||10, wis: parseInt(document.getElementById('p-ab-wis')?.value)||10, cha: parseInt(document.getElementById('p-ab-cha')?.value)||10 },
+    data: {
+      hpMax: pVal('hp-max'),
+      vision: document.getElementById('p-vision')?.value || '',
+      bab: pVal('bab'),
+      initFeat: pVal('init-feat'), initMisc: pVal('init-misc'),
+      ac: { armor: pVal('armor-ac'), shield: pVal('shield-ac'), nat: pVal('nat'), dodge: pVal('dodge'), deflect: pVal('deflect'), misc: pVal('ac-misc'), maxDex: (document.getElementById('p-armor-maxdex')?.value||'').trim()===''?null:pVal('armor-maxdex'), armorAcp: pVal('armor-acp'), shieldAcp: pVal('shield-acp') },
+      saves: { fortBase: pVal('fort-base'), fortOther: pVal('fort-other'), refBase: pVal('ref-base'), refOther: pVal('ref-other'), willBase: pVal('will-base'), willOther: pVal('will-other') },
+      cmb: { other: pVal('cmb-other'), ability: document.getElementById('p-cmb-ability')?.value || 'str' },
+      cmd: { other: pVal('cmd-other') },
+      specialDef: document.getElementById('p-special-def')?.value || ''
+    },
+    skills,
+    features
+  };
+}
+function loadPartner(pd){
+  if(!pd || typeof pd !== 'object') return;
+  buildPartnerSkills(); buildPartnerSkillDisplay();
+  const setVal=(id,v)=>{ const e=document.getElementById('p-'+id); if(e && v!==undefined && v!==null) e.value=v; };
+  setVal('name', pd.name); setVal('type', pd.type); setVal('speed', pd.speed); setVal('proficiencies', pd.proficiencies);
+  const ab = pd.abilities || {};
+  P_ABILITIES.forEach(k=>setVal('ab-'+k, ab[k] ?? 10));
+  const d = pd.data || {};
+  setVal('hp-max', d.hpMax); setVal('vision', d.vision); setVal('bab', d.bab);
+  setVal('init-feat', d.initFeat); setVal('init-misc', d.initMisc);
+  const ac = d.ac || {};
+  ['armor-ac','shield-ac','nat','dodge','deflect','ac-misc','armor-maxdex','armor-acp','shield-acp'].forEach(k=>setVal(k, ac[k.replace(/-/g,'')] ?? undefined));
+  setVal('armor-ac', ac.armor); setVal('shield-ac', ac.shield); setVal('nat', ac.nat); setVal('dodge', ac.dodge);
+  setVal('deflect', ac.deflect); setVal('ac-misc', ac.misc);
+  const md = document.getElementById('p-armor-maxdex'); if(md) md.value = (ac.maxDex==null?'':ac.maxDex);
+  setVal('armor-acp', ac.armorAcp); setVal('shield-acp', ac.shieldAcp);
+  const sv = d.saves || {};
+  setVal('fort-base', sv.fortBase); setVal('fort-other', sv.fortOther);
+  setVal('ref-base', sv.refBase); setVal('ref-other', sv.refOther);
+  setVal('will-base', sv.willBase); setVal('will-other', sv.willOther);
+  const cmb = d.cmb || {}; setVal('cmb-other', cmb.other);
+  const abSel = document.getElementById('p-cmb-ability'); if(abSel && cmb.ability) abSel.value = cmb.ability;
+  setVal('cmd-other', (d.cmd||{}).other); setVal('special-def', d.specialDef);
+  // features
+  const ft = document.getElementById('p-feat-tbody');
+  if(ft){ ft.innerHTML=''; (pd.features||[]).forEach(f=>addPartnerFeatRow(f.name, f.desc)); }
+  // skills
+  Object.entries(pd.skills || {}).forEach(([id, v])=>{
+    const tr = document.querySelector('#p-skill-tbody-a tr[data-skill="'+id+'"], #p-skill-tbody-b tr[data-skill="'+id+'"]');
+    if(!tr) return;
+    const cs = tr.querySelector('.p-skill-cs'); if(cs) cs.checked = !!v.cs;
+    const rk = tr.querySelector('.p-skill-rank'); if(rk) rk.value = v.rank ?? '';
+    const ms = tr.querySelector('.p-skill-misc'); if(ms) ms.value = v.misc ?? '';
+  });
+  renderPartner();
+}
+
+
+// ==================== 清空角色 ====================
+function clearCharacterConfirm(){
+  const mask = document.createElement('div');
+  mask.className = 'pf-confirm-mask';
+  mask.innerHTML = '<div class="pf-confirm">'
+    + '<h3>清空角色？</h3>'
+    + '<p>将清空这张角色卡的全部可填写内容，包括伙伴、笔记与肖像。此操作不可撤销。</p>'
+    + '<div class="pf-confirm-btns"><button type="button" data-cancel>取消</button>'
+    + '<button type="button" class="danger" data-ok>确认清空</button></div></div>';
+  document.body.appendChild(mask);
+  mask.addEventListener('click', (e) => {
+    if (e.target === mask || e.target.hasAttribute('data-cancel')) { mask.remove(); return; }
+    if (e.target.hasAttribute('data-ok')) {
+      mask.remove();
+      clearCharacterNow();
+    }
+  });
+}
+function clearCharacterNow(){
+  try{
+    localStorage.removeItem(LOCAL_SAVE_KEY);
+    localStorage.removeItem(PORTRAIT_KEY);
+    localStorage.removeItem(NOTE_DRAFT_KEY);
+    localStorage.removeItem('pf1e-favs:blank');
+    localStorage.removeItem('pf1e-skill-temp:blank');
+  }catch(e){}
+  location.reload();
 }
 
 
@@ -3245,13 +4189,21 @@ function init(){
   addGearRow();
   addScrollRow();
   renderLevels();
+  // 道具行改动后重算总价值/总重量
+  document.getElementById('gear-tbody')?.addEventListener('change', e=>{ if(e.target.closest('tr')) render(); });
+  buildPartnerSkills();
+  buildPartnerSkillDisplay();
   try{
     const saved = localStorage.getItem(PORTRAIT_KEY);
     if(saved) applyPortrait(saved);
   }catch{}
   // 先恢复上次手动保存的内容，再渲染
   restoreLocalSave();
+  loadNotesDraftIfEmpty();
+  renderNoteTabs();
+  bindNotes();
   render();
+  restoreUIState();
 }
 
 window.onload = init;
@@ -3261,8 +4213,8 @@ function bindSkillInteractions(){
   const sec = document.getElementById('sec-skill-display');
   if (!sec || sec.dataset.bound === '1') return;
   sec.dataset.bound = '1';
-  const favKeyOf = () => 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'local');
-  const tempKeyOf = () => 'pf1e-skill-temp:' + (new URLSearchParams(location.search).get('data_url') || 'local');
+  const favKeyOf = () => 'pf1e-favs:' + (new URLSearchParams(location.search).get('data_url') || 'blank');
+  const tempKeyOf = () => 'pf1e-skill-temp:' + (new URLSearchParams(location.search).get('data_url') || 'blank');
   const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || '{}') || {}; } catch(e) { return {}; } };
   const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} };
 
@@ -3301,7 +4253,28 @@ function bindSkillInteractions(){
 </script>
 
 <!-- 固定在右下角的视图切换按钮（在容器之外） -->
+<button id="noteFab" class="note-fab" type="button" onclick="toggleNotes()" title="笔记" aria-label="笔记">✎</button>
 <button id="viewFab" class="view-fab" onclick="toggleView()" title="切换 修改 / 展示">展示</button>
+<div id="notePanel" class="note-panel" style="display:none">
+  <div class="note-toolbar">
+    <button type="button" data-cmd="bold" title="加粗"><b>B</b></button>
+    <button type="button" data-cmd="italic" title="倾斜"><i>I</i></button>
+    <button type="button" data-cmd="underline" title="下划线"><u>U</u></button>
+    <button type="button" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+    <span class="note-palette" id="notePalette">
+      <button type="button" data-color="#222222" title="黑色" style="background:#222"></button>
+      <button type="button" data-color="#e74c3c" title="红色" style="background:#e74c3c"></button>
+      <button type="button" data-color="#e67e22" title="橙色" style="background:#e67e22"></button>
+      <button type="button" data-color="#f1c40f" title="黄色" style="background:#f1c40f"></button>
+      <button type="button" data-color="#2ecc71" title="绿色" style="background:#2ecc71"></button>
+      <button type="button" data-color="#3498db" title="蓝色" style="background:#3498db"></button>
+      <button type="button" data-color="#9b59b6" title="紫色" style="background:#9b59b6"></button>
+      <button type="button" data-color="#795548" title="棕色" style="background:#795548"></button>
+    </span>
+  </div>
+  <div id="noteTabs" class="note-tabs"></div>
+  <div id="noteEditor" class="note-editor" contenteditable="true" spellcheck="false" data-placeholder="在这里记录笔记…"></div>
+</div>
 
 </body>
 </html>
